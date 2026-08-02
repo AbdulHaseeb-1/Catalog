@@ -10,7 +10,7 @@ export {
   getCompany,
   getCompanyListItem,
   listCompanies,
-  renameCompany,
+  updateCompany,
 } from './companies';
 
 export {
@@ -32,10 +32,18 @@ export {
   deleteProducts,
   getProduct,
   listProducts,
+  reorderProducts,
   updateProduct,
   type ProductOrder,
 } from './products';
 
-export { isFlagSet, loadExportSettings, saveExportSettings, setFlag } from './settings';
+export {
+  isFlagSet,
+  loadBrandContact,
+  loadExportSettings,
+  saveBrandContact,
+  saveExportSettings,
+  setFlag,
+} from './settings';
 
 export { closeDatabase, getDatabase } from './client';

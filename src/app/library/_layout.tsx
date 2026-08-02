@@ -15,7 +15,11 @@ export default function LibraryLayout() {
         headerBackTitle: 'Back',
         contentStyle: { backgroundColor: theme.background },
       }}>
-      <Stack.Screen name="company/[companyId]" options={{ title: 'Company' }} />
+      <Stack.Screen name="company/[companyId]/index" options={{ title: 'Company' }} />
+      <Stack.Screen
+        name="company/[companyId]/reorder"
+        options={{ title: 'Reorder products' }}
+      />
       <Stack.Screen name="formula/[formulaId]" options={{ title: 'Formula' }} />
     </Stack>
   );

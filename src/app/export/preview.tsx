@@ -38,6 +38,7 @@ export default function ExportPreviewScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ kind?: string | string[]; id?: string | string[] }>();
   const settings = useLibraryStore((s) => s.exportSettings);
+  const contact = useLibraryStore((s) => s.brandContact);
 
   const scope = useMemo(
     () => parseScope(param(params.kind), param(params.id)),
@@ -64,7 +65,7 @@ export default function ExportPreviewScreen() {
     setPdfUri(null);
     setMessage(null);
     try {
-      const result = await buildPreviewHtml(scope, settings);
+      const result = await buildPreviewHtml(scope, settings, contact);
       setHtml(result.html);
       setDoc(result.document);
       setPageCount(result.pageCount);
@@ -74,7 +75,7 @@ export default function ExportPreviewScreen() {
     } finally {
       setLoading(false);
     }
-  }, [scope, settings]);
+  }, [scope, settings, contact]);
 
   useEffect(() => {
     load();
@@ -85,7 +86,7 @@ export default function ExportPreviewScreen() {
     setExporting(true);
     setMessage(null);
     try {
-      const result = await generatePdf(scope, settings);
+      const result = await generatePdf(scope, settings, contact);
       if (result.webPrint) {
         setMessage({
           text: 'Print dialog opened — choose “Save as PDF” to download the catalogue.',

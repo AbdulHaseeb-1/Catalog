@@ -6,10 +6,14 @@ export type LayoutId = '2x2' | '2-col' | '1-col' | '3-col' | '4-col';
 
 /**
  * A manufacturer / marketing company. Reference list — products point at it.
+ * Address and phone are optional and shown on the company's label page.
  */
 export interface Company {
   id: UUID;
   name: string;
+  address: string | null;
+  /** Free text — several numbers can be separated by commas. */
+  phone: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -64,6 +68,35 @@ export interface FormulaListItem extends Formula {
 
 export interface CreateCompanyInput {
   name: string;
+  address?: string;
+  phone?: string;
+}
+
+export interface UpdateCompanyInput {
+  name?: string;
+  address?: string;
+  phone?: string;
+}
+
+/**
+ * Your own details, printed at the foot of every catalog page so whoever
+ * receives the PDF knows who to call. Set once, used by every export.
+ */
+export interface BrandContact {
+  name: string;
+  address: string;
+  phone: string;
+}
+
+export const EMPTY_BRAND_CONTACT: BrandContact = {
+  name: '',
+  address: '',
+  phone: '',
+};
+
+/** True when there is anything worth printing in the footer box. */
+export function hasContactDetails(contact: BrandContact): boolean {
+  return !!(contact.name.trim() || contact.address.trim() || contact.phone.trim());
 }
 
 export interface CreateFormulaInput {
@@ -114,6 +147,8 @@ export interface ExportSettings {
   includeContents: boolean;
   /** Label page introducing each section before its images. */
   includeSectionLabels: boolean;
+  /** Your contact details in a box at the foot of every image page. */
+  includeContactBox: boolean;
 }
 
 export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
@@ -122,6 +157,7 @@ export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
   includeCover: true,
   includeContents: true,
   includeSectionLabels: true,
+  includeContactBox: true,
 };
 
 /** One labelled run of product images inside a generated document. */
@@ -137,6 +173,8 @@ export interface CatalogSection {
   membersLabel: string;
   /** Formula names (company sections) or company names (formula sections). */
   members: string[];
+  /** The company's own address / phone, when this section is a company. */
+  contactLines: string[];
   products: Product[];
 }
 

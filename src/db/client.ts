@@ -48,6 +48,12 @@ const MIGRATIONS: readonly string[] = [
     value TEXT NOT NULL
   );
   `,
+
+  // v2 — contact details for a company.
+  `
+  ALTER TABLE companies ADD COLUMN address TEXT;
+  ALTER TABLE companies ADD COLUMN phone TEXT;
+  `,
 ];
 
 let db: SQLite.SQLiteDatabase | null = null;

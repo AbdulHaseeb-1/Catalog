@@ -6,6 +6,7 @@ import { Platform } from 'react-native';
 import { renderCatalogHtml } from '@/templates';
 import {
   pageDimensions,
+  type BrandContact,
   type CatalogDocument,
   type CatalogScope,
   type ExportSettings,
@@ -66,7 +67,8 @@ async function embedImages(doc: CatalogDocument): Promise<Map<string, string>> {
 
 async function buildHtml(
   doc: CatalogDocument,
-  settings: ExportSettings
+  settings: ExportSettings,
+  contact: BrandContact
 ): Promise<string> {
   const { width, height } = pageDimensions(settings);
   const cache = await embedImages(doc);
@@ -74,6 +76,7 @@ async function buildHtml(
   const html = renderCatalogHtml({
     document: doc,
     settings,
+    contact,
     resolveImage: (uri) => (uri ? (cache.get(uri) ?? null) : null),
     pageWidth: width,
     pageHeight: height,
@@ -103,11 +106,12 @@ function countPages(html: string): number {
 /** HTML for the on-device preview — the same document the export produces. */
 export async function buildPreviewHtml(
   scope: CatalogScope,
-  settings: ExportSettings
+  settings: ExportSettings,
+  contact: BrandContact
 ): Promise<{ html: string; document: CatalogDocument; pageCount: number }> {
   const doc = await buildCatalogDocument(scope);
   assertPrintable(doc);
-  const html = await buildHtml(doc, settings);
+  const html = await buildHtml(doc, settings, contact);
   return { html, document: doc, pageCount: countPages(html) };
 }
 
@@ -172,12 +176,13 @@ async function moveToExports(sourceUri: string, fileStem: string): Promise<strin
 
 export async function generatePdf(
   scope: CatalogScope,
-  settings: ExportSettings
+  settings: ExportSettings,
+  contact: BrandContact
 ): Promise<GenerateResult> {
   const doc = await buildCatalogDocument(scope);
   assertPrintable(doc);
 
-  const html = await buildHtml(doc, settings);
+  const html = await buildHtml(doc, settings, contact);
   const { width, height } = pageDimensions(settings);
 
   if (Platform.OS === 'web') {

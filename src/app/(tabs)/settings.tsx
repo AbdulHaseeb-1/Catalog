@@ -1,13 +1,17 @@
+import { useState, type ReactNode } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ScreenHeader } from '@/components/screen-header';
 import { ThemedText } from '@/components/themed-text';
+import { Button } from '@/components/ui/button';
+import { Sheet } from '@/components/ui/sheet';
+import { TextField } from '@/components/ui/text-field';
 import { Screen, TabBar } from '@/constants/layout';
 import { Elevation, Radii, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { useLibraryStore } from '@/stores/library-store';
-import { layoutMeta } from '@/types/models';
+import { hasContactDetails, layoutMeta } from '@/types/models';
 
 export default function SettingsScreen() {
   const theme = useTheme();
@@ -15,6 +19,33 @@ export default function SettingsScreen() {
   const formulas = useLibraryStore((s) => s.formulas);
   const products = useLibraryStore((s) => s.products);
   const settings = useLibraryStore((s) => s.exportSettings);
+  const contact = useLibraryStore((s) => s.brandContact);
+  const setBrandContact = useLibraryStore((s) => s.setBrandContact);
+
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [draft, setDraft] = useState(contact);
+  const [saving, setSaving] = useState(false);
+
+  const filled = hasContactDetails(contact);
+
+  const openContact = () => {
+    setDraft(contact);
+    setSheetOpen(true);
+  };
+
+  const saveContact = async () => {
+    setSaving(true);
+    try {
+      await setBrandContact({
+        name: draft.name.trim(),
+        address: draft.address.trim(),
+        phone: draft.phone.trim(),
+      });
+      setSheetOpen(false);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]} edges={['top']}>
@@ -41,6 +72,46 @@ export default function SettingsScreen() {
           <Row icon="▦" label="Products" value={String(products.length)} />
           <Divider />
           <Row icon="💾" label="Storage" value="On device" />
+        </Card>
+
+        <Card>
+          <View style={styles.contactHead}>
+            <View style={styles.contactHeadText}>
+              <ThemedText style={styles.cardTitle}>Your contact details</ThemedText>
+              <ThemedText themeColor="textSecondary" style={styles.note}>
+                Printed in a box at the foot of every catalogue page, so whoever gets the PDF
+                knows who to call.
+              </ThemedText>
+            </View>
+          </View>
+
+          {filled ? (
+            <View style={styles.contactLines}>
+              {contact.name.trim() ? (
+                <ThemedText style={styles.contactName}>{contact.name}</ThemedText>
+              ) : null}
+              {contact.address.trim() ? (
+                <ThemedText themeColor="textSecondary" style={styles.contactLine}>
+                  {contact.address}
+                </ThemedText>
+              ) : null}
+              {contact.phone.trim() ? (
+                <ThemedText themeColor="textSecondary" style={styles.contactLine}>
+                  {contact.phone}
+                </ThemedText>
+              ) : null}
+            </View>
+          ) : (
+            <ThemedText themeColor="textSecondary" style={styles.contactEmpty}>
+              Not set — the contact box is left off until you add them.
+            </ThemedText>
+          )}
+
+          <Button
+            title={filled ? 'Edit details' : 'Add details'}
+            variant="secondary"
+            onPress={openContact}
+          />
         </Card>
 
         <Card>
@@ -78,11 +149,57 @@ export default function SettingsScreen() {
           Catalog Studio · Expo SDK 57
         </ThemedText>
       </ScrollView>
+
+      <Sheet
+        visible={sheetOpen}
+        onClose={() => setSheetOpen(false)}
+        title="Your contact details"
+        subtitle="These print at the foot of every catalogue page.">
+        <TextField
+          label="Name"
+          value={draft.name}
+          onChangeText={(name) => setDraft((d) => ({ ...d, name }))}
+          placeholder="Eagle Pharma Distributor"
+          autoCapitalize="words"
+        />
+        <TextField
+          label="Address"
+          value={draft.address}
+          onChangeText={(address) => setDraft((d) => ({ ...d, address }))}
+          placeholder="Shop 4, Medicine Market, Lahore"
+          multiline
+          numberOfLines={2}
+          style={styles.multiline}
+        />
+        <TextField
+          label="Phone"
+          value={draft.phone}
+          onChangeText={(phone) => setDraft((d) => ({ ...d, phone }))}
+          placeholder="0300 1234567"
+          keyboardType="phone-pad"
+          hint="Separate several numbers with a comma."
+        />
+        <View style={styles.sheetActions}>
+          <Button
+            title="Cancel"
+            variant="ghost"
+            onPress={() => setSheetOpen(false)}
+            style={{ flex: 1 }}
+          />
+          <Button
+            title="Save"
+            variant="primary"
+            loading={saving}
+            onPress={saveContact}
+            style={{ flex: 1 }}
+          />
+        </View>
+      </Sheet>
     </SafeAreaView>
   );
 }
 
-function Card({ children }: { children: React.ReactNode }) {
+function Card({ children }: { children: ReactNode }) {
   const theme = useTheme();
   return (
     <View
@@ -216,6 +333,37 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     lineHeight: 18,
     marginTop: Spacing.three,
+  },
+  contactHead: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  contactHeadText: { flex: 1 },
+  contactLines: {
+    marginTop: Spacing.three,
+    gap: 3,
+  },
+  contactName: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  contactLine: {
+    fontSize: 13.5,
+    lineHeight: 19,
+  },
+  contactEmpty: {
+    fontSize: 13.5,
+    lineHeight: 19,
+    marginTop: Spacing.three,
+  },
+  multiline: {
+    minHeight: 72,
+    paddingTop: Spacing.two,
+    textAlignVertical: 'top',
+  },
+  sheetActions: {
+    flexDirection: 'row',
+    gap: Spacing.two,
   },
   footer: {
     textAlign: 'center',

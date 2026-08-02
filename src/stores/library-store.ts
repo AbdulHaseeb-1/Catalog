@@ -11,6 +11,8 @@ import {
 } from '@/services/image-service';
 import {
   DEFAULT_EXPORT_SETTINGS,
+  EMPTY_BRAND_CONTACT,
+  type BrandContact,
   type Company,
   type CompanyListItem,
   type ExportSettings,
@@ -29,14 +31,19 @@ interface LibraryState {
   formulas: FormulaListItem[];
   products: ProductWithRefs[];
   exportSettings: ExportSettings;
+  /** Your own details, printed at the foot of every catalog page. */
+  brandContact: BrandContact;
   /** True while an image is being imported or cropped. */
   busy: boolean;
 
   hydrate: () => Promise<void>;
   refresh: () => Promise<void>;
 
-  addCompany: (name: string) => Promise<Company>;
-  renameCompany: (id: string, name: string) => Promise<void>;
+  addCompany: (input: { name: string; address?: string; phone?: string }) => Promise<Company>;
+  editCompany: (
+    id: string,
+    patch: { name?: string; address?: string; phone?: string }
+  ) => Promise<void>;
   removeCompany: (id: string) => Promise<void>;
 
   addFormula: (name: string) => Promise<Formula>;
@@ -54,8 +61,11 @@ interface LibraryState {
   ) => Promise<void>;
   cropProduct: (id: string, crop: CropRect) => Promise<void>;
   removeProduct: (id: string) => Promise<void>;
+  /** Persist a hand-picked order for one company's products. */
+  reorderCompanyProducts: (companyId: string, orderedIds: string[]) => Promise<void>;
 
   setExportSettings: (patch: Partial<ExportSettings>) => Promise<void>;
+  setBrandContact: (contact: BrandContact) => Promise<void>;
 }
 
 async function loadAll() {
@@ -90,13 +100,18 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   formulas: [],
   products: [],
   exportSettings: DEFAULT_EXPORT_SETTINGS,
+  brandContact: EMPTY_BRAND_CONTACT,
   busy: false,
 
   hydrate: async () => {
     set({ status: 'loading', error: null });
     try {
-      const [data, exportSettings] = await Promise.all([loadAll(), repo.loadExportSettings()]);
-      set({ ...data, exportSettings, status: 'ready' });
+      const [data, exportSettings, brandContact] = await Promise.all([
+        loadAll(),
+        repo.loadExportSettings(),
+        repo.loadBrandContact(),
+      ]);
+      set({ ...data, exportSettings, brandContact, status: 'ready' });
       void retireLegacyStorage();
     } catch (e) {
       set({
@@ -112,14 +127,14 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 
   /* ---------------------------------------------------------------- companies */
 
-  addCompany: async (name) => {
-    const company = await repo.createCompany({ name });
+  addCompany: async (input) => {
+    const company = await repo.createCompany(input);
     await get().refresh();
     return company;
   },
 
-  renameCompany: async (id, name) => {
-    await repo.renameCompany(id, name);
+  editCompany: async (id, patch) => {
+    await repo.updateCompany(id, patch);
     await get().refresh();
   },
 
@@ -239,12 +254,22 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     }
   },
 
+  reorderCompanyProducts: async (companyId, orderedIds) => {
+    await repo.reorderProducts(companyId, orderedIds);
+    await get().refresh();
+  },
+
   /* ----------------------------------------------------------------- settings */
 
   setExportSettings: async (patch) => {
     const next = { ...get().exportSettings, ...patch };
     set({ exportSettings: next });
     await repo.saveExportSettings(next);
+  },
+
+  setBrandContact: async (contact) => {
+    set({ brandContact: contact });
+    await repo.saveBrandContact(contact);
   },
 }));
 

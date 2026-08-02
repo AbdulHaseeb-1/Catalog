@@ -190,7 +190,7 @@ export function ProductForm({
           setCompanyId(id);
           setError(null);
         }}
-        onCreate={async (name) => addCompany(name)}
+        onCreate={async (name) => addCompany({ name })}
         sheetTitle="Select company"
         sheetSubtitle="Search, or add one that is not on the list yet."
         noun="company"

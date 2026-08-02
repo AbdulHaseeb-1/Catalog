@@ -13,7 +13,7 @@ import { Elevation, Radii, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { pluralize } from '@/lib/text';
 import { useLibraryStore } from '@/stores/library-store';
-import { LAYOUTS, type PageSize } from '@/types/models';
+import { hasContactDetails, LAYOUTS, type PageSize } from '@/types/models';
 
 type SheetMode = 'company' | 'formula' | null;
 
@@ -26,6 +26,7 @@ export default function GenerateScreen() {
   const products = useLibraryStore((s) => s.products);
   const settings = useLibraryStore((s) => s.exportSettings);
   const setExportSettings = useLibraryStore((s) => s.setExportSettings);
+  const contact = useLibraryStore((s) => s.brandContact);
 
   const [sheet, setSheet] = useState<SheetMode>(null);
 
@@ -191,6 +192,18 @@ export default function GenerateScreen() {
                 value={settings.includeSectionLabels}
                 onChange={(includeSectionLabels) => setExportSettings({ includeSectionLabels })}
               />
+              <Divider />
+              <ToggleRow
+                label="Contact box"
+                hint={
+                  hasContactDetails(contact)
+                    ? 'Your name, address and phone at the foot of every image page.'
+                    : 'Add your details in Settings to switch this on.'
+                }
+                value={settings.includeContactBox && hasContactDetails(contact)}
+                disabled={!hasContactDetails(contact)}
+                onChange={(includeContactBox) => setExportSettings({ includeContactBox })}
+              />
             </Section>
           </>
         )}
@@ -287,15 +300,17 @@ function ToggleRow({
   hint,
   value,
   onChange,
+  disabled,
 }: {
   label: string;
   hint: string;
   value: boolean;
   onChange: (next: boolean) => void;
+  disabled?: boolean;
 }) {
   const theme = useTheme();
   return (
-    <View style={styles.toggle}>
+    <View style={[styles.toggle, disabled && styles.toggleDisabled]}>
       <View style={styles.toggleText}>
         <ThemedText style={styles.toggleLabel}>{label}</ThemedText>
         <ThemedText themeColor="textSecondary" style={styles.toggleHint}>
@@ -304,6 +319,7 @@ function ToggleRow({
       </View>
       <Switch
         value={value}
+        disabled={disabled}
         onValueChange={onChange}
         trackColor={{ true: theme.primary, false: theme.border }}
         thumbColor={theme.white}
@@ -385,6 +401,9 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     paddingHorizontal: Spacing.two,
     paddingBottom: Spacing.two,
+  },
+  toggleDisabled: {
+    opacity: 0.5,
   },
   toggle: {
     flexDirection: 'row',

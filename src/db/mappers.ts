@@ -11,6 +11,8 @@ export type CompanyRow = {
   id: string;
   name: string;
   name_key: string;
+  address: string | null;
+  phone: string | null;
   created_at: string;
   updated_at: string;
   product_count?: number;
@@ -47,6 +49,8 @@ export function mapCompany(row: CompanyRow): Company {
   return {
     id: row.id,
     name: row.name,
+    address: row.address ?? null,
+    phone: row.phone ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

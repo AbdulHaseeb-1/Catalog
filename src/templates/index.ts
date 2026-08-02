@@ -3,7 +3,13 @@ import {
   EAGLE_PHARMA_LOGO_DATA_URI,
 } from '@/constants/brand-logo';
 import { escapeHtml, formatLongDate } from '@/lib/format';
-import { layoutMeta, type CatalogSection, type Product } from '@/types/models';
+import {
+  hasContactDetails,
+  layoutMeta,
+  type BrandContact,
+  type CatalogSection,
+  type Product,
+} from '@/types/models';
 
 import type { PdfRenderContext } from './types';
 
@@ -349,6 +355,18 @@ function renderSectionLabelPage(
       <div style="font-size:13px;line-height:20px;color:${MUTED};">
         ${escapeHtml(section.summary)}
       </div>
+      ${
+        section.contactLines.length
+          ? `<div style="margin-top:12px;">${section.contactLines
+              .map(
+                (line) =>
+                  `<div style="font-size:11.5px;line-height:17px;color:${INK};">${escapeHtml(
+                    line
+                  )}</div>`
+              )
+              .join('')}</div>`
+          : ''
+      }
       ${renderMembers(section)}
     </div>`;
 
@@ -392,6 +410,46 @@ function emptyCell(w: number, h: number, borders: { right: boolean; bottom: bool
   return `<td width="${w}" height="${h}" style="width:${w}px;height:${h}px;margin:0;padding:0;${borderCss};background:#fff;box-sizing:border-box;"></td>`;
 }
 
+/** Height of the contact strip at the foot of an image page. */
+const CONTACT_BOX_HEIGHT = 54;
+
+/**
+ * Your details, at the foot of every image page — the page is otherwise a
+ * wall of pack shots with nothing saying who to call about them.
+ */
+function renderContactBox(contact: BrandContact, pageWidth: number): string {
+  const name = contact.name.trim();
+  const address = contact.address.trim().replace(/\s*\n\s*/g, ' · ');
+  const phone = contact.phone.trim();
+
+  const right = [
+    address
+      ? `<div style="font-size:9px;line-height:13px;color:${MUTED};">${escapeHtml(address)}</div>`
+      : '',
+    phone
+      ? `<div style="font-size:10px;line-height:14px;font-weight:700;color:${INK};letter-spacing:0.2px;">${escapeHtml(
+          phone
+        )}</div>`
+      : '',
+  ].join('');
+
+  return `
+    <table width="${pageWidth}" height="${CONTACT_BOX_HEIGHT}" cellspacing="0" cellpadding="0" border="0"
+      style="width:${pageWidth}px;height:${CONTACT_BOX_HEIGHT}px;border-collapse:collapse;table-layout:fixed;
+             background:#FFFFFF;border-top:1px solid ${RULE};font-family:${FONT_STACK};">
+      <tr>
+        <td style="vertical-align:middle;padding:0 ${MARGIN_X / 2}px;">
+          <div style="font-size:12px;line-height:16px;font-weight:700;color:${INK};letter-spacing:-0.1px;">
+            ${escapeHtml(name)}
+          </div>
+        </td>
+        <td align="right" style="text-align:right;vertical-align:middle;padding:0 ${MARGIN_X / 2}px;">
+          ${right}
+        </td>
+      </tr>
+    </table>`;
+}
+
 /** Full-bleed grid of pack shots, auto-cropped to fill each cell. */
 function renderGridPage(
   ctx: PdfRenderContext,
@@ -399,9 +457,15 @@ function renderGridPage(
   columns: number,
   rows: number
 ): string {
-  const { pageWidth, pageHeight, resolveImage } = ctx;
+  const { pageWidth, pageHeight, resolveImage, settings, contact } = ctx;
+
+  // The strip eats into the grid rather than overlapping it, so no pack shot
+  // is ever partly hidden behind the contact details.
+  const showContact = settings.includeContactBox && hasContactDetails(contact);
+  const gridHeight = showContact ? pageHeight - CONTACT_BOX_HEIGHT : pageHeight;
+
   const colWidths = distribute(pageWidth, columns);
-  const rowHeights = distribute(pageHeight, rows);
+  const rowHeights = distribute(gridHeight, rows);
   const rowHtml: string[] = [];
   let index = 0;
 
@@ -423,10 +487,11 @@ function renderGridPage(
   }
 
   const inner = `
-    <table width="${pageWidth}" height="${pageHeight}" cellspacing="0" cellpadding="0" border="0"
-      style="width:${pageWidth}px;height:${pageHeight}px;border-collapse:collapse;border-spacing:0;margin:0;padding:0;table-layout:fixed;">
+    <table width="${pageWidth}" height="${gridHeight}" cellspacing="0" cellpadding="0" border="0"
+      style="width:${pageWidth}px;height:${gridHeight}px;border-collapse:collapse;border-spacing:0;margin:0;padding:0;table-layout:fixed;">
       ${rowHtml.join('')}
-    </table>`;
+    </table>
+    ${showContact ? renderContactBox(contact, pageWidth) : ''}`;
 
   return page(pageWidth, pageHeight, inner);
 }

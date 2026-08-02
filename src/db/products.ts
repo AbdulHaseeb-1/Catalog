@@ -177,6 +177,26 @@ export async function deleteProducts(ids: string[]): Promise<string[]> {
   return removed;
 }
 
+/**
+ * Persist a hand-picked order for one company's products. `orderedIds` is the
+ * full list for that company, first to last; anything missing from it keeps a
+ * position after the ones supplied.
+ */
+export async function reorderProducts(companyId: string, orderedIds: string[]): Promise<void> {
+  if (!orderedIds.length) return;
+  const db = await getDatabase();
+  const ts = nowIso();
+
+  await db.withTransactionAsync(async () => {
+    for (let i = 0; i < orderedIds.length; i++) {
+      await db.runAsync(
+        `UPDATE products SET sort_order = ?, updated_at = ? WHERE id = ? AND company_id = ?`,
+        [i, ts, orderedIds[i], companyId]
+      );
+    }
+  });
+}
+
 export async function countProducts(): Promise<number> {
   const db = await getDatabase();
   const row = await db.getFirstAsync<{ n: number }>(`SELECT COUNT(*) AS n FROM products`);

@@ -40,6 +40,9 @@ export function ReferenceDetailScreen({ kind, id }: { kind: Kind; id: string | u
                   'formula'
                 )}`
               : 'No products yet',
+            contact: [company.address, company.phone].filter(
+              (line): line is string => !!line?.trim()
+            ),
           }
         : undefined;
     }
@@ -54,6 +57,7 @@ export function ReferenceDetailScreen({ kind, id }: { kind: Kind; id: string | u
                 'companies'
               )}`
             : 'No products yet',
+          contact: [] as string[],
         }
       : undefined;
   }, [kind, id, companies, formulas]);
@@ -125,6 +129,15 @@ export function ReferenceDetailScreen({ kind, id }: { kind: Kind; id: string | u
         <ThemedText themeColor="textSecondary" style={styles.meta}>
           {entry.meta}
         </ThemedText>
+        {entry.contact.length ? (
+          <View style={styles.contact}>
+            {entry.contact.map((line) => (
+              <ThemedText key={line} themeColor="textSecondary" style={styles.contactLine}>
+                {line}
+              </ThemedText>
+            ))}
+          </View>
+        ) : null}
       </View>
 
       <View style={styles.actions}>
@@ -144,6 +157,14 @@ export function ReferenceDetailScreen({ kind, id }: { kind: Kind; id: string | u
           style={{ flex: 1 }}
         />
       </View>
+
+      {kind === 'company' && items.length > 1 ? (
+        <Button
+          title="Reorder products"
+          variant="ghost"
+          onPress={() => router.push(`/library/company/${id}/reorder`)}
+        />
+      ) : null}
     </View>
   );
 
@@ -224,6 +245,14 @@ const styles = StyleSheet.create({
   },
   meta: {
     fontSize: 14,
+  },
+  contact: {
+    marginTop: 8,
+    gap: 2,
+  },
+  contactLine: {
+    fontSize: 13,
+    lineHeight: 18,
   },
   actions: {
     flexDirection: 'row',

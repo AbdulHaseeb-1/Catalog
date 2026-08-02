@@ -25,6 +25,8 @@ type Entry = {
   name: string;
   meta: string;
   productCount: number;
+  address?: string | null;
+  phone?: string | null;
 };
 
 const COPY = {
@@ -36,7 +38,7 @@ const COPY = {
     placeholder: 'e.g. Eagle Pharma',
     addTitle: 'Add company',
     addSubtitle: 'Companies you build catalogues for.',
-    editTitle: 'Rename company',
+    editTitle: 'Edit company',
     emptyTitle: 'No companies yet',
     emptyDescription:
       'Add the companies you carry. Each product you add is tied to one of them, and every company can be exported as its own catalogue.',
@@ -71,7 +73,7 @@ export function ReferenceListScreen({ kind }: { kind: Kind }) {
   const formulas = useLibraryStore((s) => s.formulas);
   const addCompany = useLibraryStore((s) => s.addCompany);
   const addFormula = useLibraryStore((s) => s.addFormula);
-  const renameCompany = useLibraryStore((s) => s.renameCompany);
+  const editCompany = useLibraryStore((s) => s.editCompany);
   const renameFormula = useLibraryStore((s) => s.renameFormula);
   const removeCompany = useLibraryStore((s) => s.removeCompany);
   const removeFormula = useLibraryStore((s) => s.removeFormula);
@@ -79,6 +81,9 @@ export function ReferenceListScreen({ kind }: { kind: Kind }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState('');
+  // Companies carry contact details; formulas are just a name.
+  const [address, setAddress] = useState('');
+  const [phone, setPhone] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -88,6 +93,8 @@ export function ReferenceListScreen({ kind }: { kind: Kind }) {
         id: company.id,
         name: company.name,
         productCount: company.productCount,
+        address: company.address,
+        phone: company.phone,
         meta: company.productCount
           ? `${pluralize(company.productCount, 'product')} · ${pluralize(
               company.formulaCount,
@@ -120,13 +127,17 @@ export function ReferenceListScreen({ kind }: { kind: Kind }) {
   const openAdd = () => {
     setEditingId(null);
     setName('');
+    setAddress('');
+    setPhone('');
     setError(null);
     setSheetOpen(true);
   };
 
-  const openRename = (entry: Entry) => {
+  const openEdit = (entry: Entry) => {
     setEditingId(entry.id);
     setName(entry.name);
+    setAddress(entry.address ?? '');
+    setPhone(entry.phone ?? '');
     setError(null);
     setSheetOpen(true);
   };
@@ -136,10 +147,10 @@ export function ReferenceListScreen({ kind }: { kind: Kind }) {
     setError(null);
     try {
       if (editingId) {
-        if (kind === 'company') await renameCompany(editingId, name);
+        if (kind === 'company') await editCompany(editingId, { name, address, phone });
         else await renameFormula(editingId, name);
       } else if (kind === 'company') {
-        await addCompany(name);
+        await addCompany({ name, address, phone });
       } else {
         await addFormula(name);
       }
@@ -168,7 +179,7 @@ export function ReferenceListScreen({ kind }: { kind: Kind }) {
 
   const openActions = (entry: Entry) => {
     Alert.alert(entry.name, entry.meta, [
-      { text: 'Rename', onPress: () => openRename(entry) },
+      { text: kind === 'company' ? 'Edit details' : 'Rename', onPress: () => openEdit(entry) },
       { text: 'Delete', style: 'destructive', onPress: () => remove(entry) },
       { text: 'Cancel', style: 'cancel' },
     ]);
@@ -254,6 +265,27 @@ export function ReferenceListScreen({ kind }: { kind: Kind }) {
           autoFocus
           autoCapitalize="words"
         />
+        {kind === 'company' ? (
+          <>
+            <TextField
+              label="Address"
+              value={address}
+              onChangeText={setAddress}
+              placeholder="Street, city"
+              multiline
+              numberOfLines={2}
+              style={styles.multiline}
+            />
+            <TextField
+              label="Phone"
+              value={phone}
+              onChangeText={setPhone}
+              placeholder="0300 1234567"
+              keyboardType="phone-pad"
+              hint="Separate several numbers with a comma."
+            />
+          </>
+        ) : null}
         {error ? (
           <ThemedText style={[styles.error, { color: theme.danger }]}>{error}</ThemedText>
         ) : null}
@@ -292,6 +324,11 @@ const styles = StyleSheet.create({
   error: {
     fontSize: 13,
     marginTop: -8,
+  },
+  multiline: {
+    minHeight: 72,
+    paddingTop: Spacing.two,
+    textAlignVertical: 'top',
   },
   actions: {
     flexDirection: 'row',

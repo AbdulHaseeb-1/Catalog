@@ -1,4 +1,4 @@
-import { getCompany, getFormula, listProducts } from '@/db/repository';
+import { getCompany, getFormula, listCompanies, listProducts } from '@/db/repository';
 import { listSentence, pluralize, slugify } from '@/lib/text';
 import type {
   CatalogDocument,
@@ -20,10 +20,16 @@ function stripRefs(products: ProductWithRefs[]): Product[] {
   });
 }
 
+/** Address then phone, skipping whatever the company has not filled in. */
+function contactLines(company: { address: string | null; phone: string | null } | undefined) {
+  return [company?.address, company?.phone].filter((line): line is string => !!line?.trim());
+}
+
 function companySection(
   id: string,
   name: string,
-  products: ProductWithRefs[]
+  products: ProductWithRefs[],
+  company?: { address: string | null; phone: string | null }
 ): CatalogSection {
   const formulas = distinct(products.map((p) => p.formulaName));
   return {
@@ -33,6 +39,7 @@ function companySection(
     summary: `${pluralize(products.length, 'product')} · ${pluralize(formulas.length, 'formula')}`,
     membersLabel: 'Formulas in this section',
     members: formulas,
+    contactLines: contactLines(company),
     products: stripRefs(products),
   };
 }
@@ -50,6 +57,7 @@ function formulaSection(
     summary: `${pluralize(products.length, 'product')} · ${pluralize(companies.length, 'company', 'companies')}`,
     membersLabel: 'Marketed by',
     members: companies,
+    contactLines: [],
     products: stripRefs(products),
   };
 }
@@ -81,7 +89,7 @@ export async function buildCatalogDocument(scope: CatalogScope): Promise<Catalog
     const company = await getCompany(scope.id);
     if (!company) throw new Error('That company is no longer in your list.');
     const products = await listProducts({ companyId: scope.id, order: 'company' });
-    const section = companySection(company.id, company.name, products);
+    const section = companySection(company.id, company.name, products, company);
 
     return {
       scope,
@@ -119,9 +127,10 @@ export async function buildCatalogDocument(scope: CatalogScope): Promise<Catalog
 
   if (scope.kind === 'all-companies') {
     const products = await listProducts({ order: 'company' });
+    const companies = new Map((await listCompanies()).map((c) => [c.id, c]));
     const groups = groupBy(products, (p) => p.companyId);
     const sections = [...groups.entries()].map(([companyId, items]) =>
-      companySection(companyId, items[0].companyName, items)
+      companySection(companyId, items[0].companyName, items, companies.get(companyId))
     );
 
     return {

@@ -8,7 +8,8 @@ unless you share a PDF yourself.
 
 Three things, and only three:
 
-- **Companies** — a reference list of the manufacturers you carry.
+- **Companies** — a reference list of the manufacturers you carry, each with an
+  optional address and phone.
 - **Formulas** — a reference list of compositions (e.g. *Paracetamol 500mg*),
   shared across companies.
 - **Products** — a company, a formula, and one pack shot. Nothing else.
@@ -35,9 +36,23 @@ Every document is assembled the same way:
    catalogues only, paginated when the index is long).
 3. **Section label** — a starting label introducing each company or formula,
    listing the formulas it covers (or the companies that market it).
-4. **Image pages** — full-bleed grid of pack shots, auto-cropped to fill.
+4. **Image pages** — full-bleed grid of pack shots, auto-cropped to fill, with
+   your own contact details in a box along the foot of every page.
 
-Cover, contents and label pages can each be switched off per export.
+Each of those four can be switched off per export.
+
+### Your contact details
+
+Set your name, address and phone once under **Settings → Your contact details**.
+They print at the foot of every image page, whatever the catalogue covers, so
+whoever receives the PDF knows who to call. A company's own address and phone —
+entered when you add or edit it — appear on that company's label page instead.
+
+### Ordering
+
+A company's pack shots appear in the order you arrange them: open the company
+and tap **Reorder products**, then drag a row by its handle. The order fills
+each page left to right, top to bottom, and saves as you drop.
 
 ### Page setup
 
