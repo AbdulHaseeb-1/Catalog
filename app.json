@@ -17,7 +17,8 @@
         "NSPhotoLibraryUsageDescription": "Add product photos to your catalogs.",
         "NSCameraUsageDescription": "Take product photos for your catalogs."
       },
-      "bundleIdentifier": "com.eaglepharma.catalogstudio"
+      "bundleIdentifier": "com.eaglepharma.catalogstudio",
+      "buildNumber": "1"
     },
     "android": {
       "adaptiveIcon": {
@@ -36,7 +37,8 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.WRITE_EXTERNAL_STORAGE"
-      ]
+      ],
+      "versionCode": 1
     },
     "web": {
       "output": "static",

@@ -80,16 +80,30 @@ build has to be started by someone logged in.
 npm install -g eas-cli     # or use npx eas-cli below
 eas login
 eas init                   # links this repo to a project on your account, once
+git add app.json && git commit -m "Link EAS project"   # see below
 npm run build:android      # APK you can install directly on a phone
 ```
 
-`eas.json` defines three profiles:
+**Commit what `eas init` writes.** It adds `extra.eas.projectId` and `owner` to
+`app.json`. A build started from your machine will work without committing
+them, but one triggered from GitHub — the EAS GitHub integration, or CI — reads
+`app.json` out of the repository, finds no project to build for, and fails
+before it starts.
+
+`eas.json` defines four profiles:
 
 | Profile | Output | For |
 | --- | --- | --- |
 | `development` | APK with the dev client | Debugging on a real device |
-| `preview` | Installable APK / iOS simulator build | Sharing with the team |
+| `preview` | Installable APK / ad-hoc iOS build | Sharing with the team |
+| `simulator` | iOS simulator build | Mac testing, no Apple account |
 | `production` | Android App Bundle | Play Store submission |
+
+Version numbers come from `app.json` (`version`, `android.versionCode`,
+`ios.buildNumber`); the `production` profile increments the build number for
+you. There are deliberately no EAS Update `channel`s here — the app ships no
+`expo-updates`, and naming a channel without it fails the build. Add
+`expo-updates` first if you want over-the-air updates.
 
 The app id is `com.eaglepharma.catalogstudio` on both platforms — change it in
 `app.json` before the first store submission if you want a different one, since
