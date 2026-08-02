@@ -50,7 +50,8 @@
     "lint": "expo lint",
     "build:android": "npx eas-cli build --platform android --profile preview",
     "build:ios": "npx eas-cli build --platform ios --profile preview",
-    "build:production": "npx eas-cli build --platform all --profile production"
+    "build:production": "npx eas-cli build --platform all --profile production",
+    "build:simulator": "npx eas-cli build --platform ios --profile simulator"
   },
   "private": true
 }
