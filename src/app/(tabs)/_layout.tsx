@@ -55,13 +55,15 @@ export default function TabsLayout() {
           ...Elevation.bar,
         },
         tabBarLabelStyle: {
-          fontSize: 10,
+          // 5 tabs on a narrow phone — anything larger truncates "Companies".
+          fontSize: 9,
           fontWeight: '600',
           marginTop: 0,
           marginBottom: 0,
         },
         tabBarItemStyle: {
           paddingVertical: 2,
+          paddingHorizontal: 2,
         },
       }}>
       <Tabs.Screen name="index" options={{ title: 'Products', tabBarIcon: icon('products') }} />

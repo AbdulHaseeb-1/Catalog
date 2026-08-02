@@ -194,6 +194,7 @@ export function ProductForm({
         sheetTitle="Select company"
         sheetSubtitle="Search, or add one that is not on the list yet."
         noun="company"
+        nounPlural="companies"
         emptyHint="No companies yet — type a name to add the first one."
       />
 

@@ -13,11 +13,25 @@ type Props = {
   onLongPress?: () => void;
   /** Dim + tick the tile while a multi-select is active. */
   selected?: boolean;
+  /**
+   * What the surrounding screen already tells the user. On a company page the
+   * company name under every tile is noise; on a formula page the company is
+   * the only thing that distinguishes one tile from the next.
+   */
+  context?: 'all' | 'company' | 'formula';
 };
 
-export function ProductTile({ product, onPress, onLongPress, selected }: Props) {
+export function ProductTile({
+  product,
+  onPress,
+  onLongPress,
+  selected,
+  context = 'all',
+}: Props) {
   const theme = useTheme();
   const uri = resolveImageUri(product.imageUri);
+  const primary = context === 'formula' ? product.companyName : product.formulaName;
+  const secondary = context === 'all' ? product.companyName : null;
 
   return (
     <Pressable
@@ -53,11 +67,13 @@ export function ProductTile({ product, onPress, onLongPress, selected }: Props) 
 
       <View style={styles.meta}>
         <ThemedText style={styles.formula} numberOfLines={1}>
-          {product.formulaName}
+          {primary}
         </ThemedText>
-        <ThemedText themeColor="textSecondary" style={styles.company} numberOfLines={1}>
-          {product.companyName}
-        </ThemedText>
+        {secondary ? (
+          <ThemedText themeColor="textSecondary" style={styles.company} numberOfLines={1}>
+            {secondary}
+          </ThemedText>
+        ) : null}
       </View>
     </Pressable>
   );

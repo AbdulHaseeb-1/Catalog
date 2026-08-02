@@ -20,6 +20,8 @@ type Props = {
   sheetSubtitle?: string;
   /** Lower-case noun, e.g. "company". */
   noun: string;
+  /** Plural of `noun`, when adding "s" is wrong. */
+  nounPlural?: string;
   emptyHint: string;
 };
 
@@ -34,6 +36,7 @@ export function ReferencePicker({
   sheetTitle,
   sheetSubtitle,
   noun,
+  nounPlural,
   emptyHint,
 }: Props) {
   const theme = useTheme();
@@ -81,6 +84,7 @@ export function ReferencePicker({
         onSelect={onChange}
         onCreate={onCreate}
         noun={noun}
+        nounPlural={nounPlural}
         emptyHint={emptyHint}
       />
     </View>

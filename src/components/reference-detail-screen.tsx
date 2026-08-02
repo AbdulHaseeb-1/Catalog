@@ -182,6 +182,7 @@ export function ReferenceDetailScreen({ kind, id }: { kind: Kind; id: string | u
         <View style={{ width: tileWidth }}>
           <ProductTile
             product={item}
+            context={kind}
             onPress={() => router.push(`/product/${item.id}`)}
             onLongPress={() => openActions(item.id, `${item.formulaName} · ${item.companyName}`)}
           />

@@ -12,7 +12,7 @@ import { useTheme } from '@/hooks/use-theme';
 import { pluralize } from '@/lib/text';
 import { buildPreviewHtml, generatePdf, sharePdf } from '@/services/pdf-service';
 import { useLibraryStore } from '@/stores/library-store';
-import type { CatalogDocument, CatalogScope } from '@/types/models';
+import { pageDimensions, type CatalogDocument, type CatalogScope } from '@/types/models';
 
 function param(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -150,7 +150,7 @@ export default function ExportPreviewScreen() {
           <Button title="Try again" variant="secondary" onPress={load} />
         </ScrollView>
       ) : html ? (
-        <HtmlPreview html={html} />
+        <HtmlPreview html={html} pageWidth={pageDimensions(settings).width} />
       ) : null}
 
       {message ? (

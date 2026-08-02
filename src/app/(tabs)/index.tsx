@@ -244,6 +244,9 @@ const styles = StyleSheet.create({
   filters: {
     gap: Spacing.two,
     paddingVertical: Spacing.three,
+    // Without this the row stretches its children on the cross axis and they
+    // collapse to zero height, hiding the chip labels.
+    alignItems: 'center',
   },
   center: {
     flex: 1,

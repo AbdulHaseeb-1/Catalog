@@ -26,6 +26,8 @@ type Props = {
   onCreate?: (name: string) => Promise<{ id: string }>;
   /** Lower-case noun, e.g. "company" — used in search and create copy. */
   noun: string;
+  /** Plural of `noun`; defaults to a naive "+s", which "company" needs. */
+  nounPlural?: string;
   emptyHint: string;
 };
 
@@ -40,6 +42,7 @@ export function PickerSheet({
   onSelect,
   onCreate,
   noun,
+  nounPlural = `${noun}s`,
   emptyHint,
 }: Props) {
   const theme = useTheme();
@@ -89,7 +92,7 @@ export function PickerSheet({
           setQuery(next);
           setError(null);
         }}
-        placeholder={`Search ${noun}s`}
+        placeholder={`Search ${nounPlural}`}
         placeholderTextColor={theme.textSecondary}
         autoCorrect={false}
         style={[

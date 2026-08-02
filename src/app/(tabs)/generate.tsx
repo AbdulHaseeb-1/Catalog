@@ -204,6 +204,7 @@ export default function GenerateScreen() {
         options={companyOptions}
         onSelect={(id) => openPreview({ kind: 'company', id })}
         noun="company"
+        nounPlural="companies"
         emptyHint="No company has products yet."
       />
 

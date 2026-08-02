@@ -575,6 +575,7 @@ const styles = StyleSheet.create({
   chips: {
     gap: Spacing.two,
     paddingVertical: 4,
+    alignItems: 'center',
   },
   chip: {
     borderRadius: Radii.md,
