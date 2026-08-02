@@ -71,6 +71,33 @@ npx expo start -c
 Use Expo Go on a phone for the image picker, camera and PDF share sheet. On
 web, export opens the browser print dialog — choose *Save as PDF*.
 
+## Building an installable app
+
+Builds run on EAS under your own Expo account — the repo is configured, but the
+build has to be started by someone logged in.
+
+```bash
+npm install -g eas-cli     # or use npx eas-cli below
+eas login
+eas init                   # links this repo to a project on your account, once
+npm run build:android      # APK you can install directly on a phone
+```
+
+`eas.json` defines three profiles:
+
+| Profile | Output | For |
+| --- | --- | --- |
+| `development` | APK with the dev client | Debugging on a real device |
+| `preview` | Installable APK / iOS simulator build | Sharing with the team |
+| `production` | Android App Bundle | Play Store submission |
+
+The app id is `com.eaglepharma.catalogstudio` on both platforms — change it in
+`app.json` before the first store submission if you want a different one, since
+it is permanent afterwards.
+
+iOS builds additionally need an Apple Developer account; `eas build --platform
+ios` walks through the credentials.
+
 ## Layout of the code
 
 ```
