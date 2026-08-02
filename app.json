@@ -3,6 +3,9 @@
     "name": "Catalog Studio",
     "slug": "Ali",
     "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "ali",
@@ -13,7 +16,8 @@
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Add product photos to your catalogs.",
         "NSCameraUsageDescription": "Take product photos for your catalogs."
-      }
+      },
+      "bundleIdentifier": "com.eaglepharma.catalogstudio"
     },
     "android": {
       "adaptiveIcon": {
@@ -26,7 +30,13 @@
         "android.permission.CAMERA",
         "android.permission.READ_MEDIA_IMAGES"
       ],
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.eaglepharma.catalogstudio",
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "output": "static",
