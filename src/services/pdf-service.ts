@@ -3,95 +3,120 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { Platform } from 'react-native';
 
-import { getCatalogWithPhotos } from '@/db/repository';
 import { renderCatalogHtml } from '@/templates';
 import {
-  pageDimensionsForCatalog,
-  type CatalogWithPhotos,
-  type PageSize,
+  pageDimensions,
+  type CatalogDocument,
+  type CatalogScope,
+  type ExportSettings,
 } from '@/types/models';
 
+import { buildCatalogDocument } from './catalog-document';
 import { toPdfDataUri } from './image-service';
 
-export function pageDimensions(pageSize: PageSize): { width: number; height: number } {
-  if (pageSize === 'Letter') return { width: 612, height: 792 };
-  return { width: 595, height: 842 };
-}
+export type GenerateResult = {
+  uri: string;
+  /** Web has no file to share — the browser print dialog was opened instead. */
+  webPrint?: boolean;
+  numberOfPages?: number;
+  document: CatalogDocument;
+};
 
 /**
- * Build HTML with every photo inlined as base64 data URI.
- * This is required on iOS and more reliable on Android.
+ * Inline every product image as a base64 data URI. Required on iOS (WKWebView
+ * refuses `file://` sources) and far more reliable on Android.
  */
-async function buildHtml(catalog: CatalogWithPhotos): Promise<string> {
-  // Layout may override page size (e.g. compact square for 2×2)
-  const { width, height } = pageDimensionsForCatalog(catalog);
-  const cache = new Map<string, string | null>();
-  let embedded = 0;
+async function embedImages(doc: CatalogDocument): Promise<Map<string, string>> {
+  const cache = new Map<string, string>();
+  const seen = new Set<string>();
   let failed = 0;
 
-  // Sequential conversion avoids memory spikes from parallel base64 of many photos
-  for (const photo of catalog.photos) {
-    if (!photo.uri) continue;
-    if (cache.has(photo.uri)) continue;
-    try {
-      const dataUri = await toPdfDataUri(photo.uri);
-      if (dataUri?.startsWith('data:')) {
-        cache.set(photo.uri, dataUri);
-        embedded += 1;
-      } else {
-        cache.set(photo.uri, null);
+  for (const section of doc.sections) {
+    for (const product of section.products) {
+      const uri = product.imageUri;
+      if (!uri || seen.has(uri)) continue;
+      seen.add(uri);
+      try {
+        const dataUri = await toPdfDataUri(uri);
+        if (dataUri?.startsWith('data:')) {
+          cache.set(uri, dataUri);
+        } else {
+          failed += 1;
+          console.warn('[pdf] Could not embed image for product', product.id);
+        }
+      } catch (e) {
         failed += 1;
-        console.warn('[pdf] Failed to embed photo', photo.id);
+        console.warn('[pdf] Error embedding image for product', product.id, e);
       }
-    } catch (e) {
-      cache.set(photo.uri, null);
-      failed += 1;
-      console.warn('[pdf] Error embedding photo', photo.id, e);
     }
   }
 
-  if (embedded === 0 && catalog.photos.length > 0) {
+  if (cache.size === 0 && seen.size > 0) {
     throw new Error(
-      'Could not load any photos for the PDF. Try re-uploading the images, then export again.'
+      'None of the product images could be read. Re-add the images, then export again.'
     );
   }
 
-  const resolveImage = (uri: string | null): string | null => {
-    if (!uri) return null;
-    return cache.get(uri) ?? null;
-  };
+  if (__DEV__ && failed) {
+    console.warn(`[pdf] ${failed} image(s) could not be embedded`);
+  }
+
+  return cache;
+}
+
+async function buildHtml(
+  doc: CatalogDocument,
+  settings: ExportSettings
+): Promise<string> {
+  const { width, height } = pageDimensions(settings);
+  const cache = await embedImages(doc);
 
   const html = renderCatalogHtml({
-    catalog,
-    photos: catalog.photos,
-    resolveImage,
-    generatedAt: new Date().toISOString(),
+    document: doc,
+    settings,
+    resolveImage: (uri) => (uri ? (cache.get(uri) ?? null) : null),
     pageWidth: width,
     pageHeight: height,
   });
 
   if (__DEV__) {
     console.log(
-      `[pdf] HTML built: ${html.length} chars, ${embedded} images, ${failed} failed, page ${width}x${height}`
+      `[pdf] ${doc.sections.length} section(s), ${doc.productCount} product(s), ` +
+        `${cache.size} image(s), ${html.length} chars, page ${width}×${height}`
     );
   }
 
   return html;
 }
 
-export async function buildPreviewHtml(catalogId: string): Promise<string> {
-  const catalog = await getCatalogWithPhotos(catalogId);
-  if (!catalog) throw new Error('Catalog not found');
-  return buildHtml(catalog);
+function assertPrintable(doc: CatalogDocument): void {
+  if (!doc.productCount || !doc.sections.length) {
+    throw new Error('There are no products in this selection yet. Add one and try again.');
+  }
 }
 
-/** Open system print dialog on web (Save as PDF). */
-async function printHtmlOnWeb(html: string): Promise<{ uri: string; webPrint: true }> {
+/** Exact page count, read back from the markup the renderer produced. */
+function countPages(html: string): number {
+  return (html.match(/class="page"/g) ?? []).length;
+}
+
+/** HTML for the on-device preview — the same document the export produces. */
+export async function buildPreviewHtml(
+  scope: CatalogScope,
+  settings: ExportSettings
+): Promise<{ html: string; document: CatalogDocument; pageCount: number }> {
+  const doc = await buildCatalogDocument(scope);
+  assertPrintable(doc);
+  const html = await buildHtml(doc, settings);
+  return { html, document: doc, pageCount: countPages(html) };
+}
+
+/** Open the system print dialog on web (the user picks "Save as PDF"). */
+async function printHtmlOnWeb(html: string): Promise<void> {
   if (typeof window === 'undefined' || typeof document === 'undefined') {
-    throw new Error('PDF export is only available in a browser or native app.');
+    throw new Error('PDF export is only available in a browser or the native app.');
   }
 
-  // Write HTML into a hidden iframe and print it
   const iframe = document.createElement('iframe');
   iframe.setAttribute(
     'style',
@@ -99,20 +124,18 @@ async function printHtmlOnWeb(html: string): Promise<{ uri: string; webPrint: tr
   );
   document.body.appendChild(iframe);
 
-  const doc = iframe.contentDocument || iframe.contentWindow?.document;
-  if (!doc) {
+  const frameDoc = iframe.contentDocument || iframe.contentWindow?.document;
+  if (!frameDoc) {
     document.body.removeChild(iframe);
-    throw new Error('Could not open print frame');
+    throw new Error('Could not open the print frame.');
   }
 
-  doc.open();
-  doc.write(html);
-  doc.close();
+  frameDoc.open();
+  frameDoc.write(html);
+  frameDoc.close();
 
-  await new Promise<void>((resolve) => {
-    // Give images a moment to decode
-    setTimeout(() => resolve(), 400);
-  });
+  // Give the embedded images a moment to decode before printing.
+  await new Promise<void>((resolve) => setTimeout(resolve, 400));
 
   try {
     iframe.contentWindow?.focus();
@@ -122,29 +145,44 @@ async function printHtmlOnWeb(html: string): Promise<{ uri: string; webPrint: tr
       try {
         document.body.removeChild(iframe);
       } catch {
-        // ignore
+        // already gone
       }
     }, 1000);
   }
+}
 
-  return { uri: '', webPrint: true };
+/** Copy the generated file somewhere stable, so sharing later still works. */
+async function moveToExports(sourceUri: string, fileStem: string): Promise<string> {
+  const root = FileSystem.documentDirectory;
+  if (!root) return sourceUri;
+
+  try {
+    const exportsDir = `${root.endsWith('/') ? root : `${root}/`}exports`;
+    const info = await FileSystem.getInfoAsync(exportsDir);
+    if (!info.exists) {
+      await FileSystem.makeDirectoryAsync(exportsDir, { intermediates: true });
+    }
+    const dest = `${exportsDir}/${fileStem}-${Date.now()}.pdf`;
+    await FileSystem.copyAsync({ from: sourceUri, to: dest });
+    return dest;
+  } catch {
+    return sourceUri;
+  }
 }
 
 export async function generatePdf(
-  catalogId: string
-): Promise<{ uri: string; webPrint?: boolean; numberOfPages?: number }> {
-  const catalog = await getCatalogWithPhotos(catalogId);
-  if (!catalog) throw new Error('Catalog not found');
-  if (!catalog.photos.length) {
-    throw new Error('Add at least one photo before exporting.');
-  }
+  scope: CatalogScope,
+  settings: ExportSettings
+): Promise<GenerateResult> {
+  const doc = await buildCatalogDocument(scope);
+  assertPrintable(doc);
 
-  const html = await buildHtml(catalog);
-  const { width, height } = pageDimensionsForCatalog(catalog);
+  const html = await buildHtml(doc, settings);
+  const { width, height } = pageDimensions(settings);
 
-  // Web: expo-print only opens window.print() and does not return a file URI
   if (Platform.OS === 'web') {
-    return printHtmlOnWeb(html);
+    await printHtmlOnWeb(html);
+    return { uri: '', webPrint: true, document: doc };
   }
 
   let result: { uri: string; numberOfPages?: number };
@@ -153,65 +191,49 @@ export async function generatePdf(
       html,
       width,
       height,
-      // Zero margins — edge-to-edge images (iOS)
+      // Zero margins — the image grid runs edge to edge.
       margins: { top: 0, right: 0, bottom: 0, left: 0 },
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new Error(
-      `PDF engine failed: ${msg}. Try fewer photos or a denser layout (3–4 per row).`
+      `PDF engine failed: ${msg}. Try a denser layout (3–4 per row) or a narrower selection.`
     );
   }
 
   if (!result?.uri) {
-    throw new Error('PDF was generated but no file path was returned.');
+    throw new Error('The PDF was generated but no file path came back.');
   }
 
-  // Copy to a stable exports path when possible
-  const root = FileSystem.documentDirectory;
-  if (root) {
-    try {
-      const exportsDir = `${root.endsWith('/') ? root : `${root}/`}exports`;
-      const info = await FileSystem.getInfoAsync(exportsDir);
-      if (!info.exists) {
-        await FileSystem.makeDirectoryAsync(exportsDir, { intermediates: true });
-      }
-      const safeTitle =
-        catalog.title.replace(/[^a-zA-Z0-9-_]+/g, '_').slice(0, 40) || 'catalog';
-      const dest = `${exportsDir}/${safeTitle}-${Date.now()}.pdf`;
-      await FileSystem.copyAsync({ from: result.uri, to: dest });
-      return { uri: dest, numberOfPages: result.numberOfPages };
-    } catch {
-      return { uri: result.uri, numberOfPages: result.numberOfPages };
-    }
-  }
-
-  return { uri: result.uri, numberOfPages: result.numberOfPages };
+  return {
+    uri: await moveToExports(result.uri, doc.fileStem),
+    numberOfPages: result.numberOfPages,
+    document: doc,
+  };
 }
 
 export async function sharePdf(uri: string): Promise<void> {
   if (!uri) {
-    throw new Error('No PDF file to share. On web, use the browser print dialog and “Save as PDF”.');
-  }
-  const available = await Sharing.isAvailableAsync();
-  if (!available) {
-    throw new Error('Sharing is not available on this device');
+    throw new Error('No PDF to share. On web, use the print dialog and choose “Save as PDF”.');
   }
 
-  // Ensure file still exists
+  if (!(await Sharing.isAvailableAsync())) {
+    throw new Error('Sharing is not available on this device.');
+  }
+
   try {
     const info = await FileSystem.getInfoAsync(uri);
     if (!info.exists) {
-      throw new Error('PDF file is missing. Generate it again.');
+      throw new Error('That PDF file is missing. Generate it again.');
     }
   } catch (e) {
     if (e instanceof Error && e.message.includes('missing')) throw e;
-    // getInfoAsync may throw on some URIs — still try share
+    // getInfoAsync can throw on some URI schemes — still worth trying to share.
   }
 
   await Sharing.shareAsync(uri, {
     mimeType: 'application/pdf',
-    dialogTitle: 'Share photo catalog PDF',
+    dialogTitle: 'Share product catalogue',
     UTI: 'com.adobe.pdf',
   });
 }

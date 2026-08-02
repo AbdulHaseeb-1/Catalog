@@ -1,16 +1,20 @@
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { ScreenHeader } from '@/components/screen-header';
 import { ThemedText } from '@/components/themed-text';
 import { Screen, TabBar } from '@/constants/layout';
 import { Elevation, Radii, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { useCatalogStore } from '@/stores/catalog-store';
+import { useLibraryStore } from '@/stores/library-store';
+import { layoutMeta } from '@/types/models';
 
 export default function SettingsScreen() {
   const theme = useTheme();
-  const catalogs = useCatalogStore((s) => s.catalogs);
-  const photoCount = catalogs.reduce((sum, c) => sum + c.photoCount, 0);
+  const companies = useLibraryStore((s) => s.companies);
+  const formulas = useLibraryStore((s) => s.formulas);
+  const products = useLibraryStore((s) => s.products);
+  const settings = useLibraryStore((s) => s.exportSettings);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]} edges={['top']}>
@@ -19,47 +23,56 @@ export default function SettingsScreen() {
           styles.scroll,
           {
             maxWidth: Screen.maxWidth,
-            width: '100%',
-            alignSelf: 'center',
             paddingHorizontal: Screen.padX,
-            paddingTop: Screen.padTop,
-            paddingBottom: TabBar.contentInset + 24,
+            paddingBottom: TabBar.contentInset + Spacing.four,
           },
         ]}
         showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
-          <ThemedText style={styles.heading}>Settings</ThemedText>
-          <ThemedText themeColor="textSecondary" style={styles.lead}>
-            Local-first photo catalogs. Nothing leaves this device unless you share a PDF.
-          </ThemedText>
-        </View>
+        <ScreenHeader
+          title="Settings"
+          subtitle="Everything stays on this device. Nothing is uploaded unless you share a PDF yourself."
+        />
 
-        <View
-          style={[
-            styles.card,
-            Elevation.card,
-            { backgroundColor: theme.surfaceElevated, borderColor: theme.border },
-          ]}>
-          <Row icon="▦" label="Catalogs" value={String(catalogs.length)} />
-          <Divider color={theme.border} />
-          <Row icon="🖼" label="Photos" value={String(photoCount)} />
-          <Divider color={theme.border} />
+        <Card>
+          <Row icon="⬢" label="Companies" value={String(companies.length)} />
+          <Divider />
+          <Row icon="◆" label="Formulas" value={String(formulas.length)} />
+          <Divider />
+          <Row icon="▦" label="Products" value={String(products.length)} />
+          <Divider />
           <Row icon="💾" label="Storage" value="On device" />
-        </View>
+        </Card>
 
-        <View
-          style={[
-            styles.card,
-            Elevation.card,
-            { backgroundColor: theme.surfaceElevated, borderColor: theme.border },
-          ]}>
+        <Card>
+          <ThemedText style={styles.cardTitle}>Current export setup</ThemedText>
+          <View style={styles.steps}>
+            <Row
+              icon="▤"
+              label="Layout"
+              value={layoutMeta(settings.layoutId).name}
+              compact
+            />
+            <Row icon="📄" label="Paper" value={settings.pageSize} compact />
+            <Row
+              icon="🏷"
+              label="Label pages"
+              value={settings.includeSectionLabels ? 'On' : 'Off'}
+              compact
+            />
+          </View>
+          <ThemedText themeColor="textSecondary" style={styles.note}>
+            Change these on the PDF tab — they apply to every catalogue you generate.
+          </ThemedText>
+        </Card>
+
+        <Card>
           <ThemedText style={styles.cardTitle}>How it works</ThemedText>
           <View style={styles.steps}>
-            <Step n="1" text="Create a catalog and batch-upload photos" />
-            <Step n="2" text="Crop images to fit your grid (2×2, 2×3, …)" />
-            <Step n="3" text="Preview and export a clean PDF to share" />
+            <Step n="1" text="Add your companies and formulas once" />
+            <Step n="2" text="Add products — company, formula, pack shot" />
+            <Step n="3" text="Generate a PDF for one company, one formula, or all of them" />
           </View>
-        </View>
+        </Card>
 
         <ThemedText themeColor="textSecondary" style={styles.footer}>
           Catalog Studio · Expo SDK 57
@@ -69,12 +82,36 @@ export default function SettingsScreen() {
   );
 }
 
-function Row({ icon, label, value }: { icon: string; label: string; value: string }) {
+function Card({ children }: { children: React.ReactNode }) {
   const theme = useTheme();
   return (
-    <View style={styles.row}>
+    <View
+      style={[
+        styles.card,
+        Elevation.card,
+        { backgroundColor: theme.surfaceElevated, borderColor: theme.border },
+      ]}>
+      {children}
+    </View>
+  );
+}
+
+function Row({
+  icon,
+  label,
+  value,
+  compact,
+}: {
+  icon: string;
+  label: string;
+  value: string;
+  compact?: boolean;
+}) {
+  const theme = useTheme();
+  return (
+    <View style={[styles.row, compact && styles.rowCompact]}>
       <View style={[styles.rowIcon, { backgroundColor: theme.primaryMuted }]}>
-        <ThemedText style={{ fontSize: 14 }}>{icon}</ThemedText>
+        <ThemedText style={{ fontSize: 13 }}>{icon}</ThemedText>
       </View>
       <ThemedText style={styles.rowLabel}>{label}</ThemedText>
       <ThemedText themeColor="textSecondary" style={styles.rowValue}>
@@ -84,8 +121,9 @@ function Row({ icon, label, value }: { icon: string; label: string; value: strin
   );
 }
 
-function Divider({ color }: { color: string }) {
-  return <View style={[styles.divider, { backgroundColor: color }]} />;
+function Divider() {
+  const theme = useTheme();
+  return <View style={[styles.divider, { backgroundColor: theme.border }]} />;
 }
 
 function Step({ n, text }: { n: string; text: string }) {
@@ -105,21 +143,9 @@ function Step({ n, text }: { n: string; text: string }) {
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   scroll: {
+    width: '100%',
+    alignSelf: 'center',
     gap: Screen.sectionGap,
-  },
-  header: {
-    gap: 8,
-    marginBottom: 4,
-  },
-  heading: {
-    fontSize: 30,
-    fontWeight: '600',
-    letterSpacing: -0.6,
-    lineHeight: 36,
-  },
-  lead: {
-    fontSize: 15,
-    lineHeight: 22,
   },
   card: {
     borderRadius: Radii.lg,
@@ -138,9 +164,12 @@ const styles = StyleSheet.create({
     minHeight: 44,
     paddingVertical: 4,
   },
+  rowCompact: {
+    minHeight: 38,
+  },
   rowIcon: {
-    width: 34,
-    height: 34,
+    width: 32,
+    height: 32,
     borderRadius: Radii.pill,
     alignItems: 'center',
     justifyContent: 'center',
@@ -182,6 +211,11 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     lineHeight: 20,
+  },
+  note: {
+    fontSize: 12.5,
+    lineHeight: 18,
+    marginTop: Spacing.three,
   },
   footer: {
     textAlign: 'center',

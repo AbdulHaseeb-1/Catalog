@@ -2,14 +2,15 @@ import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect, useState } from 'react';
 import { useColorScheme } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
-import { useCatalogStore } from '@/stores/catalog-store';
+import { useLibraryStore } from '@/stores/library-store';
 
 SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
-  const hydrate = useCatalogStore((s) => s.hydrate);
+  const hydrate = useLibraryStore((s) => s.hydrate);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -32,17 +33,15 @@ export default function RootLayout() {
   if (!ready) return null;
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen
-          name="catalog"
-          options={{
-            headerShown: false,
-            presentation: 'card',
-          }}
-        />
-      </Stack>
-    </ThemeProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="product" />
+          <Stack.Screen name="library" />
+          <Stack.Screen name="export" />
+        </Stack>
+      </ThemeProvider>
+    </GestureHandlerRootView>
   );
 }

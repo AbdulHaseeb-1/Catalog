@@ -1,41 +1,63 @@
 import * as FileSystem from 'expo-file-system/legacy';
-import * as ImageManipulator from 'expo-image-manipulator';
+import { ImageManipulator, SaveFormat, type ImageRef } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { Platform } from 'react-native';
 
 import { createId } from '@/lib/id';
 
 const IMAGES_ROOT = 'images';
+const PRODUCTS_FOLDER = `${IMAGES_ROOT}/products`;
 const BASE64 = 'base64' as const;
+
+/** Longest edge kept on disk — plenty for print, small enough to stay fast. */
+const STORED_MAX_WIDTH = 1600;
+const STORED_QUALITY = 0.85;
+/** Downscale used when embedding into PDF HTML, to keep memory in check. */
+const PDF_MAX_WIDTH = 1100;
+const PDF_QUALITY = 0.72;
+
+export type CropRect = {
+  originX: number;
+  originY: number;
+  width: number;
+  height: number;
+};
+
+export type SavedImage = {
+  /** Path stored in the database — relative on native, a data URI on web. */
+  relativePath: string;
+  width: number | null;
+  height: number | null;
+};
 
 function documentRoot(): string | null {
   return FileSystem.documentDirectory ?? null;
 }
 
-function cacheRoot(): string | null {
-  return FileSystem.cacheDirectory ?? null;
+function withTrailingSlash(path: string): string {
+  return path.endsWith('/') ? path : `${path}/`;
 }
 
+const REMOTE_SCHEMES = [
+  'file://',
+  'http://',
+  'https://',
+  'data:',
+  'blob:',
+  'content:',
+  'ph://',
+  'assets-library://',
+];
+
+/** Turn a stored path into something an <Image> or the manipulator can open. */
 export function resolveImageUri(relativeOrAbsolute: string | null | undefined): string | null {
   if (!relativeOrAbsolute) return null;
-  if (
-    relativeOrAbsolute.startsWith('file://') ||
-    relativeOrAbsolute.startsWith('http://') ||
-    relativeOrAbsolute.startsWith('https://') ||
-    relativeOrAbsolute.startsWith('data:') ||
-    relativeOrAbsolute.startsWith('blob:') ||
-    relativeOrAbsolute.startsWith('content:') ||
-    relativeOrAbsolute.startsWith('ph://') ||
-    relativeOrAbsolute.startsWith('assets-library://')
-  ) {
+  if (REMOTE_SCHEMES.some((scheme) => relativeOrAbsolute.startsWith(scheme))) {
     return relativeOrAbsolute;
   }
   const root = documentRoot();
   if (!root) return relativeOrAbsolute;
-  // Avoid double slashes
-  const base = root.endsWith('/') ? root : `${root}/`;
-  const rel = relativeOrAbsolute.replace(/^\//, '');
-  return `${base}${rel}`;
+  return `${withTrailingSlash(root)}${relativeOrAbsolute.replace(/^\//, '')}`;
 }
 
 async function ensureDir(path: string): Promise<void> {
@@ -45,31 +67,63 @@ async function ensureDir(path: string): Promise<void> {
   }
 }
 
-async function compressImage(
-  uri: string,
-  maxWidth = 1600,
-  compress = 0.82
-): Promise<{ uri: string; width?: number; height?: number }> {
+/* -------------------------------------------------------------------------- */
+/* Manipulation (expo-image-manipulator contextual API)                        */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Render an image with an optional crop, downscaling only when the result is
+ * wider than `maxWidth` — resizing unconditionally would upscale small pack
+ * shots and cost bytes for no extra detail.
+ *
+ * The returned ref owns native memory: callers must `release()` it.
+ */
+async function renderImage(
+  source: string,
+  opts: { crop?: CropRect; maxWidth?: number } = {}
+): Promise<ImageRef> {
+  const context = ImageManipulator.manipulate(source);
+  if (opts.crop) {
+    context.crop({
+      originX: Math.max(0, Math.round(opts.crop.originX)),
+      originY: Math.max(0, Math.round(opts.crop.originY)),
+      width: Math.max(1, Math.round(opts.crop.width)),
+      height: Math.max(1, Math.round(opts.crop.height)),
+    });
+  }
+
+  const rendered = await context.renderAsync();
+  if (!opts.maxWidth || rendered.width <= opts.maxWidth) return rendered;
+
+  // Chaining from the rendered ref avoids decoding the source file twice.
   try {
-    const result = await ImageManipulator.manipulateAsync(
-      uri,
-      [{ resize: { width: maxWidth } }],
-      { compress, format: ImageManipulator.SaveFormat.JPEG }
-    );
-    return { uri: result.uri, width: result.width, height: result.height };
-  } catch {
-    return { uri };
+    return await ImageManipulator.manipulate(rendered).resize({ width: opts.maxWidth }).renderAsync();
+  } finally {
+    rendered.release();
   }
 }
 
-async function readFileAsBase64(uri: string): Promise<string | null> {
+async function renderAndSave(
+  source: string,
+  opts: { crop?: CropRect; maxWidth?: number; compress: number; base64?: boolean }
+) {
+  const ref = await renderImage(source, { crop: opts.crop, maxWidth: opts.maxWidth });
   try {
-    const info = await FileSystem.getInfoAsync(uri);
-    if (!info.exists) return null;
-  } catch {
-    // getInfo may fail on some schemes — still try read
+    return await ref.saveAsync({
+      compress: opts.compress,
+      format: SaveFormat.JPEG,
+      base64: opts.base64,
+    });
+  } finally {
+    ref.release();
   }
+}
 
+/* -------------------------------------------------------------------------- */
+/* Reading images as data URIs (required by expo-print)                        */
+/* -------------------------------------------------------------------------- */
+
+async function readFileAsBase64(uri: string): Promise<string | null> {
   try {
     return await FileSystem.readAsStringAsync(uri, { encoding: BASE64 });
   } catch {
@@ -97,93 +151,52 @@ async function blobToDataUri(uri: string): Promise<string | null> {
   }
 }
 
+function guessMime(uri: string): string {
+  const lower = uri.toLowerCase();
+  if (lower.includes('.png')) return 'image/png';
+  if (lower.includes('.webp')) return 'image/webp';
+  return 'image/jpeg';
+}
+
 /**
- * Convert any stored/picked URI into a `data:image/jpeg;base64,...` string.
- * Required for expo-print on iOS (WKWebView cannot load file:// images).
+ * Convert any stored/picked URI into a `data:image/jpeg;base64,…` string.
+ * WKWebView (used by expo-print on iOS) cannot load `file://` images, so every
+ * picture must be inlined before printing.
  */
 export async function uriToDataUri(uri: string): Promise<string | null> {
   if (!uri) return null;
   if (uri.startsWith('data:')) return uri;
 
-  // Web / remote / blob
-  if (
-    Platform.OS === 'web' ||
-    uri.startsWith('blob:') ||
-    uri.startsWith('http://') ||
-    uri.startsWith('https://')
-  ) {
-    const fromBlob = await blobToDataUri(uri);
-    if (fromBlob) return fromBlob;
-  }
-
-  // Prefer reading through a compressed JPEG in cache (handles content:// better)
   try {
-    const compressed = await ImageManipulator.manipulateAsync(
-      uri,
-      [{ resize: { width: 1400 } }],
-      { compress: 0.75, format: ImageManipulator.SaveFormat.JPEG }
-    );
-    const b64 = await readFileAsBase64(compressed.uri);
-    if (b64) return `data:image/jpeg;base64,${b64}`;
+    const result = await renderAndSave(uri, { compress: 0.9, base64: true });
+    if (result.base64) return `data:image/jpeg;base64,${result.base64}`;
   } catch {
-    // continue
+    // fall through to direct reads
   }
 
   const direct = await readFileAsBase64(uri);
-  if (direct) {
-    // Guess mime from extension
-    const lower = uri.toLowerCase();
-    const mime = lower.includes('.png')
-      ? 'image/png'
-      : lower.includes('.webp')
-        ? 'image/webp'
-        : 'image/jpeg';
-    return `data:${mime};base64,${direct}`;
-  }
+  if (direct) return `data:${guessMime(uri)};base64,${direct}`;
 
-  // Last resort: fetch (works for some file:// on web-like runtimes)
-  const fetched = await blobToDataUri(uri);
-  return fetched;
-}
-
-export async function toDataUri(
-  relativeOrAbsolute: string | null | undefined
-): Promise<string | null> {
-  const absolute = resolveImageUri(relativeOrAbsolute);
-  if (!absolute) return null;
-  return uriToDataUri(absolute);
+  return blobToDataUri(uri);
 }
 
 /**
- * Prepare a smaller data URI specifically for PDF embedding (memory-safe).
+ * Data URI sized for PDF embedding. Every product image in a catalog goes
+ * through this, so it trades a little resolution for a much smaller document.
  */
 export async function toPdfDataUri(
   relativeOrAbsolute: string | null | undefined
 ): Promise<string | null> {
   const absolute = resolveImageUri(relativeOrAbsolute);
   if (!absolute) return null;
-  if (absolute.startsWith('data:')) {
-    // Re-compress data URIs by writing temp file when possible
-    try {
-      const root = cacheRoot();
-      if (root && absolute.includes('base64,')) {
-        const raw = absolute.split('base64,')[1];
-        const tmp = `${root}pdf-tmp-${createId()}.jpg`;
-        await FileSystem.writeAsStringAsync(tmp, raw, { encoding: BASE64 });
-        const compressed = await compressImage(tmp, 1000, 0.7);
-        const b64 = await readFileAsBase64(compressed.uri);
-        if (b64) return `data:image/jpeg;base64,${b64}`;
-      }
-    } catch {
-      // keep original data uri
-    }
-    return absolute;
-  }
 
   try {
-    const compressed = await compressImage(absolute, 1000, 0.7);
-    const b64 = await readFileAsBase64(compressed.uri);
-    if (b64) return `data:image/jpeg;base64,${b64}`;
+    const result = await renderAndSave(absolute, {
+      maxWidth: PDF_MAX_WIDTH,
+      compress: PDF_QUALITY,
+      base64: true,
+    });
+    if (result.base64) return `data:image/jpeg;base64,${result.base64}`;
   } catch {
     // fall through
   }
@@ -191,101 +204,137 @@ export async function toPdfDataUri(
   return uriToDataUri(absolute);
 }
 
-/**
- * Persist a picked image under the app document directory (native),
- * or as a data URI when the filesystem is unavailable (web).
- */
-export async function saveImageAsset(
-  sourceUri: string,
-  opts: { catalogId: string }
-): Promise<{ relativePath: string; width: number | null; height: number | null }> {
-  const compressed = await compressImage(sourceUri);
+/* -------------------------------------------------------------------------- */
+/* Persisting product images                                                   */
+/* -------------------------------------------------------------------------- */
+
+async function persist(
+  produced: { uri: string; width: number; height: number },
+  filenamePrefix: string
+): Promise<SavedImage> {
   const root = documentRoot();
 
+  // Web has no document directory — keep the bytes inline in the database.
   if (Platform.OS === 'web' || !root) {
-    const dataUri = await uriToDataUri(compressed.uri);
-    if (!dataUri) throw new Error('Could not read image data');
-    return {
-      relativePath: dataUri,
-      width: compressed.width ?? null,
-      height: compressed.height ?? null,
-    };
+    const dataUri = await uriToDataUri(produced.uri);
+    if (!dataUri) throw new Error('Could not read the selected image.');
+    return { relativePath: dataUri, width: produced.width, height: produced.height };
   }
 
-  const folder = `${IMAGES_ROOT}/${opts.catalogId}`;
-  const absFolder = `${root.endsWith('/') ? root : `${root}/`}${folder}`;
+  const absFolder = `${withTrailingSlash(root)}${PRODUCTS_FOLDER}`;
   await ensureDir(absFolder);
 
-  const filename = `${createId()}.jpg`;
-  const relativePath = `${folder}/${filename}`;
+  const filename = `${filenamePrefix}${createId()}.jpg`;
+  const relativePath = `${PRODUCTS_FOLDER}/${filename}`;
   const dest = `${absFolder}/${filename}`;
 
   try {
-    await FileSystem.copyAsync({ from: compressed.uri, to: dest });
+    await FileSystem.copyAsync({ from: produced.uri, to: dest });
+    const info = await FileSystem.getInfoAsync(dest);
+    if (!info.exists) throw new Error('Image file missing after copy');
   } catch {
-    try {
-      const dataUri = await uriToDataUri(compressed.uri);
-      if (!dataUri?.includes('base64,')) throw new Error('no base64');
-      const base64 = dataUri.split('base64,')[1];
-      await FileSystem.writeAsStringAsync(dest, base64, { encoding: BASE64 });
-    } catch {
-      const dataUri = await uriToDataUri(compressed.uri);
-      if (!dataUri) throw new Error('Failed to save image');
-      return {
-        relativePath: dataUri,
-        width: compressed.width ?? null,
-        height: compressed.height ?? null,
-      };
-    }
+    // Some URIs cannot be copied directly — write the decoded bytes instead.
+    const dataUri = await uriToDataUri(produced.uri);
+    const base64 = dataUri?.split('base64,')[1];
+    if (!base64) throw new Error('Could not save the image to this device.');
+    await FileSystem.writeAsStringAsync(dest, base64, { encoding: BASE64 });
   }
 
-  // Verify file was written
-  const info = await FileSystem.getInfoAsync(dest);
-  if (!info.exists) {
-    const dataUri = await uriToDataUri(compressed.uri);
-    if (!dataUri) throw new Error('Image file missing after save');
-    return {
-      relativePath: dataUri,
-      width: compressed.width ?? null,
-      height: compressed.height ?? null,
-    };
-  }
-
-  return {
-    relativePath,
-    width: compressed.width ?? null,
-    height: compressed.height ?? null,
-  };
+  return { relativePath, width: produced.width, height: produced.height };
 }
 
-/** Multi-select from library (batch upload). */
-export async function pickImages(): Promise<string[]> {
+/** Compress a picked image and store it in the app's product image folder. */
+export async function saveProductImage(sourceUri: string): Promise<SavedImage> {
+  const produced = await renderAndSave(sourceUri, {
+    maxWidth: STORED_MAX_WIDTH,
+    compress: STORED_QUALITY,
+  });
+  return persist(produced, '');
+}
+
+/** Crop an existing product image and store the result as a new file. */
+export async function cropProductImage(
+  sourceUri: string,
+  crop: CropRect
+): Promise<SavedImage> {
+  const absolute = resolveImageUri(sourceUri) ?? sourceUri;
+  const produced = await renderAndSave(absolute, {
+    crop,
+    maxWidth: STORED_MAX_WIDTH,
+    compress: 0.88,
+  });
+  return persist(produced, 'crop-');
+}
+
+/** Pixel size of an image, used by the crop editor's transform maths. */
+export async function getImageSize(uri: string): Promise<{ width: number; height: number }> {
+  const absolute = resolveImageUri(uri) ?? uri;
+  const ref = await renderImage(absolute);
+  try {
+    if (!ref.width || !ref.height) throw new Error('Could not read image size');
+    return { width: ref.width, height: ref.height };
+  } finally {
+    ref.release();
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Cleanup                                                                     */
+/* -------------------------------------------------------------------------- */
+
+/** Best-effort removal of a stored image. Data URIs live in the row itself. */
+export async function deleteImageFile(relativePath: string | null | undefined): Promise<void> {
+  if (!relativePath || relativePath.startsWith('data:')) return;
+  const absolute = resolveImageUri(relativePath);
+  if (!absolute || !absolute.startsWith('file://')) return;
+  try {
+    await FileSystem.deleteAsync(absolute, { idempotent: true });
+  } catch {
+    // A leftover file is harmless — never fail a delete over it.
+  }
+}
+
+export async function deleteImageFiles(paths: (string | null | undefined)[]): Promise<void> {
+  for (const path of paths) {
+    await deleteImageFile(path);
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Pickers                                                                     */
+/* -------------------------------------------------------------------------- */
+
+export async function pickImage(): Promise<string | null> {
+  const [uri] = await pickImages({ multiple: false });
+  return uri ?? null;
+}
+
+export async function pickImages(opts?: { multiple?: boolean }): Promise<string[]> {
   const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
   if (!permission.granted) {
     throw new Error('Photo library permission is required. Enable it in Settings.');
   }
 
+  const multiple = opts?.multiple ?? true;
   const result = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ['images'],
-    allowsMultipleSelection: true,
-    selectionLimit: 0,
+    allowsMultipleSelection: multiple,
+    selectionLimit: multiple ? 0 : 1,
     allowsEditing: false,
     quality: 0.9,
     exif: false,
   });
 
   if (result.canceled || !result.assets?.length) return [];
-  return result.assets.map((a) => a.uri).filter(Boolean);
+  return result.assets.map((asset) => asset.uri).filter(Boolean);
 }
 
 export async function takePhoto(): Promise<string | null> {
-  if (Platform.OS === 'web') {
-    const uris = await pickImages();
-    return uris[0] ?? null;
-  }
+  if (Platform.OS === 'web') return pickImage();
+
   const permission = await ImagePicker.requestCameraPermissionsAsync();
   if (!permission.granted) {
-    throw new Error('Camera permission is required');
+    throw new Error('Camera permission is required.');
   }
   const result = await ImagePicker.launchCameraAsync({
     allowsEditing: false,
@@ -294,102 +343,4 @@ export async function takePhoto(): Promise<string | null> {
   });
   if (result.canceled || !result.assets?.[0]?.uri) return null;
   return result.assets[0].uri;
-}
-
-export async function deleteCatalogImageFolder(catalogId: string): Promise<void> {
-  const root = documentRoot();
-  if (!root) return;
-  try {
-    const path = `${root.endsWith('/') ? root : `${root}/`}${IMAGES_ROOT}/${catalogId}`;
-    const info = await FileSystem.getInfoAsync(path);
-    if (info.exists) {
-      await FileSystem.deleteAsync(path, { idempotent: true });
-    }
-  } catch {
-    // best-effort
-  }
-}
-
-/**
- * Load pixel size of an image (for crop math).
- */
-export async function getImageSize(
-  uri: string
-): Promise<{ width: number; height: number }> {
-  const absolute = resolveImageUri(uri) ?? uri;
-  // manipulate with empty actions returns dimensions on most platforms
-  try {
-    const result = await ImageManipulator.manipulateAsync(absolute, [], {
-      compress: 1,
-      format: ImageManipulator.SaveFormat.JPEG,
-    });
-    if (result.width && result.height) {
-      return { width: result.width, height: result.height };
-    }
-  } catch {
-    // fall through
-  }
-  throw new Error('Could not read image size');
-}
-
-/**
- * Crop image to a rect and save into the catalog folder (or data URI on web).
- */
-export async function cropAndSaveImage(
-  sourceUri: string,
-  crop: { originX: number; originY: number; width: number; height: number },
-  opts: { catalogId: string }
-): Promise<{ relativePath: string; width: number; height: number }> {
-  const absolute = resolveImageUri(sourceUri) ?? sourceUri;
-
-  const cropped = await ImageManipulator.manipulateAsync(
-    absolute,
-    [
-      {
-        crop: {
-          originX: Math.max(0, Math.round(crop.originX)),
-          originY: Math.max(0, Math.round(crop.originY)),
-          width: Math.max(1, Math.round(crop.width)),
-          height: Math.max(1, Math.round(crop.height)),
-        },
-      },
-      // Keep a sensible max edge for PDF
-      { resize: { width: 1600 } },
-    ],
-    { compress: 0.88, format: ImageManipulator.SaveFormat.JPEG }
-  );
-
-  const root = documentRoot();
-  if (Platform.OS === 'web' || !root) {
-    const dataUri = await uriToDataUri(cropped.uri);
-    if (!dataUri) throw new Error('Could not save cropped image');
-    return {
-      relativePath: dataUri,
-      width: cropped.width,
-      height: cropped.height,
-    };
-  }
-
-  const folder = `${IMAGES_ROOT}/${opts.catalogId}`;
-  const absFolder = `${root.endsWith('/') ? root : `${root}/`}${folder}`;
-  await ensureDir(absFolder);
-  const filename = `crop-${createId()}.jpg`;
-  const relativePath = `${folder}/${filename}`;
-  const destPath = `${absFolder}/${filename}`;
-
-  try {
-    await FileSystem.copyAsync({ from: cropped.uri, to: destPath });
-  } catch {
-    const dataUri = await uriToDataUri(cropped.uri);
-    if (!dataUri?.includes('base64,')) throw new Error('Failed to write crop');
-    await FileSystem.writeAsStringAsync(destPath, dataUri.split('base64,')[1], {
-      encoding: BASE64,
-    });
-  }
-
-  return {
-    relativePath,
-    width: cropped.width,
-    height: cropped.height,
-  };
 }
