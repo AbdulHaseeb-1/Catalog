@@ -1,48 +1,199 @@
 export type UUID = string;
 export type PageSize = 'A4' | 'Letter';
 
-/** How many photos per row in the PDF / preview. */
+/** How many product images per row in the PDF / preview. */
 export type LayoutId = '2x2' | '2-col' | '1-col' | '3-col' | '4-col';
 
-export interface Catalog {
+/**
+ * A manufacturer / marketing company. Reference list — products point at it.
+ * Address and phone are optional and shown on the company's label page.
+ */
+export interface Company {
   id: UUID;
-  title: string;
-  layoutId: LayoutId;
-  pageSize: PageSize;
+  name: string;
+  address: string | null;
+  /** Free text — several numbers can be separated by commas. */
+  phone: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface Photo {
+/**
+ * A generic composition (e.g. "Paracetamol 500mg"). Reference list — products
+ * point at it. Formulas are shared across companies, which is what makes a
+ * "one formula, every company" catalog possible.
+ */
+export interface Formula {
   id: UUID;
-  catalogId: UUID;
-  uri: string;
-  sortOrder: number;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * A product is exactly three things: a company, a formula, and a pack shot.
+ */
+export interface Product {
+  id: UUID;
+  companyId: UUID;
+  formulaId: UUID;
+  imageUri: string;
   width: number | null;
   height: number | null;
+  sortOrder: number;
   createdAt: string;
+  updatedAt: string;
 }
 
-export interface CatalogWithPhotos extends Catalog {
-  photos: Photo[];
+/** Product joined with the names of its company and formula (for lists). */
+export interface ProductWithRefs extends Product {
+  companyName: string;
+  formulaName: string;
 }
 
-export interface CatalogListItem extends Catalog {
-  photoCount: number;
-  /** First photo uri for thumbnail */
+export interface CompanyListItem extends Company {
+  productCount: number;
+  /** Distinct formulas this company has products for. */
+  formulaCount: number;
+  /** First product image, used as the list thumbnail. */
   coverUri: string | null;
 }
 
-export interface CreateCatalogInput {
-  title: string;
-  layoutId?: LayoutId;
+export interface FormulaListItem extends Formula {
+  productCount: number;
+  /** Distinct companies that market this formula. */
+  companyCount: number;
+  coverUri: string | null;
 }
 
-export interface UpdateCatalogInput {
-  title?: string;
-  layoutId?: LayoutId;
-  pageSize?: PageSize;
+export interface CreateCompanyInput {
+  name: string;
+  address?: string;
+  phone?: string;
 }
+
+export interface UpdateCompanyInput {
+  name?: string;
+  address?: string;
+  phone?: string;
+}
+
+/**
+ * Your own details, printed at the foot of every catalog page so whoever
+ * receives the PDF knows who to call. Set once, used by every export.
+ */
+export interface BrandContact {
+  name: string;
+  address: string;
+  phone: string;
+}
+
+export const EMPTY_BRAND_CONTACT: BrandContact = {
+  name: '',
+  address: '',
+  phone: '',
+};
+
+/** True when there is anything worth printing in the footer box. */
+export function hasContactDetails(contact: BrandContact): boolean {
+  return !!(contact.name.trim() || contact.address.trim() || contact.phone.trim());
+}
+
+export interface CreateFormulaInput {
+  name: string;
+}
+
+export interface CreateProductInput {
+  companyId: UUID;
+  formulaId: UUID;
+  imageUri: string;
+  width?: number | null;
+  height?: number | null;
+}
+
+export interface UpdateProductInput {
+  companyId?: UUID;
+  formulaId?: UUID;
+  imageUri?: string;
+  width?: number | null;
+  height?: number | null;
+}
+
+/* -------------------------------------------------------------------------- */
+/* PDF scopes                                                                 */
+/* -------------------------------------------------------------------------- */
+
+export type ScopeKind = 'company' | 'formula' | 'all-companies' | 'all-formulas';
+
+/**
+ * What a generated catalog covers.
+ * - `company`       one company's full range
+ * - `formula`       one formula across every company that markets it
+ * - `all-companies` every company, one labelled section each
+ * - `all-formulas`  every formula, one labelled section each
+ */
+export type CatalogScope =
+  | { kind: 'company'; id: UUID }
+  | { kind: 'formula'; id: UUID }
+  | { kind: 'all-companies' }
+  | { kind: 'all-formulas' };
+
+export interface ExportSettings {
+  layoutId: LayoutId;
+  pageSize: PageSize;
+  /** Brand cover page with the document title. */
+  includeCover: boolean;
+  /** Contents page listing every section (multi-section documents only). */
+  includeContents: boolean;
+  /** Label page introducing each section before its images. */
+  includeSectionLabels: boolean;
+  /** Your contact details in a box at the foot of every image page. */
+  includeContactBox: boolean;
+}
+
+export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
+  layoutId: '2-col',
+  pageSize: 'A4',
+  includeCover: true,
+  includeContents: true,
+  includeSectionLabels: true,
+  includeContactBox: true,
+};
+
+/** One labelled run of product images inside a generated document. */
+export interface CatalogSection {
+  id: UUID;
+  /** Small caps line above the title, e.g. "COMPANY". */
+  kicker: string;
+  /** Company or formula name. */
+  title: string;
+  /** One line describing what this section holds. */
+  summary: string;
+  /** Heading for the member list, e.g. "Formulas in this section". */
+  membersLabel: string;
+  /** Formula names (company sections) or company names (formula sections). */
+  members: string[];
+  /** The company's own address / phone, when this section is a company. */
+  contactLines: string[];
+  products: Product[];
+}
+
+/** A fully resolved catalog, ready to render. */
+export interface CatalogDocument {
+  scope: CatalogScope;
+  title: string;
+  /** The starting label — what these products are about. */
+  subtitle: string;
+  sections: CatalogSection[];
+  productCount: number;
+  generatedAt: string;
+  /** Safe filename stem for the exported PDF. */
+  fileStem: string;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Page layouts                                                               */
+/* -------------------------------------------------------------------------- */
 
 export type LayoutMeta = {
   id: LayoutId;
@@ -54,7 +205,7 @@ export type LayoutMeta = {
   perPage: number;
   /**
    * Optional custom page size in points (72 PPI).
-   * Used to keep cells square / compact (e.g. 2×2).
+   * Used to keep cells square / compact.
    */
   pageWidth?: number;
   pageHeight?: number;
@@ -62,23 +213,22 @@ export type LayoutMeta = {
 
 /**
  * PDF page grids.
- * - 2×2 → 4 photos on a compact square page
+ * - 2×2 → 4 images on a normal A4 page
  * - 2 per row → 2×3 = 6 on A4
  */
 export const LAYOUTS: LayoutMeta[] = [
   {
     id: '2x2',
     name: '2×2 grid',
-    description: 'Four photos on a normal A4 page (2×2). Crop photos to the cell aspect for a clean fit.',
+    description: 'Four pack shots on an A4 page. Crop images to the cell aspect for a clean fit.',
     columns: 2,
     rows: 2,
     perPage: 4,
-    // Uses normal A4 / Letter page size from catalog
   },
   {
     id: '2-col',
     name: '2 per row',
-    description: 'Two photos side by side, three rows — 6 photos per page on A4, auto-cropped.',
+    description: 'Two pack shots side by side, three rows — 6 per page on A4, auto-cropped.',
     columns: 2,
     rows: 3,
     perPage: 6,
@@ -86,7 +236,7 @@ export const LAYOUTS: LayoutMeta[] = [
   {
     id: '1-col',
     name: '1 per row',
-    description: 'Full-width photos · 2 per page · auto-cropped.',
+    description: 'Full-width pack shots · 2 per page · auto-cropped.',
     columns: 1,
     rows: 2,
     perPage: 2,
@@ -94,7 +244,7 @@ export const LAYOUTS: LayoutMeta[] = [
   {
     id: '3-col',
     name: '3 per row',
-    description: '3×3 grid · 9 photos per page · auto-cropped.',
+    description: '3×3 grid · 9 per page · auto-cropped.',
     columns: 3,
     rows: 3,
     perPage: 9,
@@ -102,7 +252,7 @@ export const LAYOUTS: LayoutMeta[] = [
   {
     id: '4-col',
     name: '4 per row',
-    description: '4×3 grid · 12 photos per page · auto-cropped.',
+    description: '4×3 grid · 12 per page · auto-cropped.',
     columns: 4,
     rows: 3,
     perPage: 12,
@@ -115,15 +265,15 @@ export function layoutMeta(id: LayoutId | string | null | undefined): LayoutMeta
   return found ?? LAYOUTS.find((l) => l.id === '2-col') ?? LAYOUTS[0];
 }
 
-/** Resolve PDF page size in points for a catalog + layout. */
-export function pageDimensionsForCatalog(catalog: {
+/** Resolve PDF page size in points for the chosen layout + paper. */
+export function pageDimensions(settings: {
   pageSize: PageSize;
   layoutId: LayoutId | string;
 }): { width: number; height: number } {
-  const meta = layoutMeta(catalog.layoutId);
+  const meta = layoutMeta(settings.layoutId);
   if (meta.pageWidth && meta.pageHeight) {
     return { width: meta.pageWidth, height: meta.pageHeight };
   }
-  if (catalog.pageSize === 'Letter') return { width: 612, height: 792 };
+  if (settings.pageSize === 'Letter') return { width: 612, height: 792 };
   return { width: 595, height: 842 }; // A4
 }

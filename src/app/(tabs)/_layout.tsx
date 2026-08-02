@@ -1,15 +1,26 @@
 import { Tabs } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, type ColorValue } from 'react-native';
 
 import { TabBar } from '@/constants/layout';
 import { Colors, Elevation, Radii } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
+/** Filled glyph when focused, outline when not — tinted by the tab bar. */
+const ICONS: Record<string, { on: string; off: string }> = {
+  products: { on: '▦', off: '▤' },
+  companies: { on: '⬢', off: '⬡' },
+  formulas: { on: '◆', off: '◇' },
+  generate: { on: '⬇', off: '⇩' },
+  settings: { on: '⚙', off: '○' },
+};
+
 function TabIcon({ name, focused, color }: { name: string; focused: boolean; color: string }) {
-  const icon = name === 'catalogs' ? (focused ? '▦' : '▢') : focused ? '⚙' : '○';
+  const glyph = ICONS[name] ?? ICONS.products;
   return (
     <View style={styles.iconWrap}>
-      <Text style={{ color, fontSize: 17, fontWeight: '600' }}>{icon}</Text>
+      <Text style={{ color, fontSize: 16, fontWeight: '600' }}>
+        {focused ? glyph.on : glyph.off}
+      </Text>
     </View>
   );
 }
@@ -17,6 +28,12 @@ function TabIcon({ name, focused, color }: { name: string; focused: boolean; col
 export default function TabsLayout() {
   const scheme = useColorScheme();
   const theme = Colors[scheme === 'unspecified' ? 'light' : scheme];
+
+  const icon =
+    (name: string) =>
+    ({ color, focused }: { color: ColorValue; focused: boolean }) => (
+      <TabIcon name={name} focused={focused} color={String(color)} />
+    );
 
   return (
     <Tabs
@@ -38,33 +55,25 @@ export default function TabsLayout() {
           ...Elevation.bar,
         },
         tabBarLabelStyle: {
-          fontSize: 11,
+          // 5 tabs on a narrow phone — anything larger truncates "Companies".
+          fontSize: 9,
           fontWeight: '600',
           marginTop: 0,
           marginBottom: 0,
         },
         tabBarItemStyle: {
           paddingVertical: 2,
+          paddingHorizontal: 2,
         },
       }}>
+      <Tabs.Screen name="index" options={{ title: 'Products', tabBarIcon: icon('products') }} />
       <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Catalogs',
-          tabBarIcon: ({ color, focused }) => (
-            <TabIcon name="catalogs" focused={focused} color={String(color)} />
-          ),
-        }}
+        name="companies"
+        options={{ title: 'Companies', tabBarIcon: icon('companies') }}
       />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: 'Settings',
-          tabBarIcon: ({ color, focused }) => (
-            <TabIcon name="settings" focused={focused} color={String(color)} />
-          ),
-        }}
-      />
+      <Tabs.Screen name="formulas" options={{ title: 'Formulas', tabBarIcon: icon('formulas') }} />
+      <Tabs.Screen name="generate" options={{ title: 'PDF', tabBarIcon: icon('generate') }} />
+      <Tabs.Screen name="settings" options={{ title: 'Settings', tabBarIcon: icon('settings') }} />
     </Tabs>
   );
 }
@@ -72,7 +81,7 @@ export default function TabsLayout() {
 const styles = StyleSheet.create({
   iconWrap: {
     width: 36,
-    height: 26,
+    height: 24,
     borderRadius: Radii.pill,
     alignItems: 'center',
     justifyContent: 'center',

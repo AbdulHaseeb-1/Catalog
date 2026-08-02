@@ -2,7 +2,7 @@ import { Stack } from 'expo-router';
 
 import { useTheme } from '@/hooks/use-theme';
 
-export default function CatalogLayout() {
+export default function ProductLayout() {
   const theme = useTheme();
 
   return (
@@ -15,13 +15,11 @@ export default function CatalogLayout() {
         headerBackTitle: 'Back',
         contentStyle: { backgroundColor: theme.background },
       }}>
-      <Stack.Screen name="[catalogId]/index" options={{ title: 'Photos' }} />
-      <Stack.Screen name="[catalogId]/layouts" options={{ title: 'Layout' }} />
-      <Stack.Screen name="[catalogId]/preview" options={{ title: 'Preview' }} />
-      <Stack.Screen name="[catalogId]/export" options={{ title: 'Export' }} />
+      <Stack.Screen name="new" options={{ title: 'Add product' }} />
+      <Stack.Screen name="[productId]/index" options={{ title: 'Product' }} />
       <Stack.Screen
-        name="[catalogId]/crop/[photoId]"
-        options={{ title: 'Crop', presentation: 'modal' }}
+        name="[productId]/crop"
+        options={{ title: 'Crop image', presentation: 'modal' }}
       />
     </Stack>
   );

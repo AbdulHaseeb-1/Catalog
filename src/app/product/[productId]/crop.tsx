@@ -11,36 +11,24 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, {
-  runOnJS,
-  useAnimatedStyle,
-  useSharedValue,
-} from 'react-native-reanimated';
+import Animated, { runOnJS, useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { Button } from '@/components/ui/button';
 import { Radii, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import {
-  cropAspectPresets,
-  type CropAspectId,
-} from '@/lib/crop-aspects';
-import { getImageSize, resolveImageUri } from '@/services/image-service';
-import { useCatalogStore } from '@/stores/catalog-store';
-import { layoutMeta } from '@/types/models';
+import { cropAspectPresets, type CropAspectId } from '@/lib/crop-aspects';
+import { getImageSize, resolveImageUri, type CropRect } from '@/services/image-service';
+import { useLibraryStore } from '@/stores/library-store';
 
 const AnimatedImage = Animated.createAnimatedComponent(Image);
 
-function param(v: string | string[] | undefined): string | undefined {
-  return Array.isArray(v) ? v[0] : v;
+function param(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
 }
 
-type CropRect = { originX: number; originY: number; width: number; height: number };
-
-/**
- * Map viewport crop frame + image transform → pixel crop rect in source image.
- */
+/** Map the viewport crop frame + image transform onto pixels in the source. */
 function computeCropFromTransform(
   imgW: number,
   imgH: number,
@@ -62,7 +50,7 @@ function computeCropFromTransform(
   let width = frame.w / scale;
   let height = frame.h / scale;
 
-  // Clamp to image bounds
+  // Clamp to the image bounds.
   originX = Math.max(0, Math.min(imgW - 1, originX));
   originY = Math.max(0, Math.min(imgH - 1, originY));
   width = Math.max(1, Math.min(imgW - originX, width));
@@ -76,36 +64,31 @@ function computeCropFromTransform(
   };
 }
 
-export default function CropPhotoScreen() {
-  const params = useLocalSearchParams<{
-    catalogId?: string | string[];
-    photoId?: string | string[];
-  }>();
-  const catalogId = param(params.catalogId);
-  const photoId = param(params.photoId);
+export default function CropProductImageScreen() {
+  const params = useLocalSearchParams<{ productId?: string | string[] }>();
+  const productId = param(params.productId);
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { width: winW } = useWindowDimensions();
 
-  const catalog = useCatalogStore((s) => s.activeCatalog);
-  const loadCatalog = useCatalogStore((s) => s.loadCatalog);
-  const cropPhoto = useCatalogStore((s) => s.cropPhoto);
+  const product = useLibraryStore((s) => s.products.find((p) => p.id === productId));
+  const settings = useLibraryStore((s) => s.exportSettings);
+  const cropProduct = useLibraryStore((s) => s.cropProduct);
 
-  const photo = catalog?.photos.find((p) => p.id === photoId);
-  const displayUri = resolveImageUri(photo?.uri);
-  const layout = layoutMeta(catalog?.layoutId ?? '2x2');
+  const displayUri = resolveImageUri(product?.imageUri);
 
+  // Presets follow the layout the catalogue will actually be exported with.
   const presets = useMemo(
-    () => cropAspectPresets(catalog?.layoutId ?? '2x2', catalog?.pageSize ?? 'A4'),
-    [catalog?.layoutId, catalog?.pageSize]
+    () => cropAspectPresets(settings.layoutId, settings.pageSize),
+    [settings.layoutId, settings.pageSize]
   );
 
   const [aspectId, setAspectId] = useState<CropAspectId>('layout-cell');
   const [imgSize, setImgSize] = useState<{ width: number; height: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  // JS-side copy of transform for result marker + save (updated from worklets)
+  // JS-side mirror of the gesture transform, for the preview and for saving.
   const [tx, setTx] = useState(0);
   const [ty, setTy] = useState(0);
   const [zoom, setZoom] = useState(1);
@@ -113,7 +96,6 @@ export default function CropPhotoScreen() {
   const activePreset = presets.find((p) => p.id === aspectId) ?? presets[0];
   const aspect = activePreset.ratio;
 
-  // Shared values for gestures
   const scale = useSharedValue(1);
   const startScale = useSharedValue(1);
   const translateX = useSharedValue(0);
@@ -124,7 +106,6 @@ export default function CropPhotoScreen() {
   const editorW = Math.min(winW - 32, 400);
   const editorH = Math.min(editorW * 1.15, 420);
 
-  // Crop frame size inside editor (fixed aspect)
   const frame = useMemo(() => {
     const pad = 16;
     const maxW = editorW - pad * 2;
@@ -138,21 +119,16 @@ export default function CropPhotoScreen() {
       fw = maxW;
       fh = fw / aspect;
     }
-    return {
-      w: fw,
-      h: fh,
-      x: (editorW - fw) / 2,
-      y: (editorH - fh) / 2,
-    };
+    return { w: fw, h: fh, x: (editorW - fw) / 2, y: (editorH - fh) / 2 };
   }, [editorW, editorH, aspect]);
 
-  // Scale that fits full image in editor
+  /** Scale that fits the whole image inside the editor. */
   const fitScale = useMemo(() => {
     if (!imgSize) return 1;
     return Math.min(editorW / imgSize.width, editorH / imgSize.height);
   }, [imgSize, editorW, editorH]);
 
-  // Min zoom so image always covers the crop frame
+  /** Minimum zoom that still covers the crop frame — no empty corners. */
   const minZoom = useMemo(() => {
     if (!imgSize) return 1;
     const coverX = frame.w / (imgSize.width * fitScale);
@@ -161,23 +137,19 @@ export default function CropPhotoScreen() {
   }, [imgSize, fitScale, frame]);
 
   useEffect(() => {
-    if (catalogId) loadCatalog(catalogId);
-  }, [catalogId, loadCatalog]);
-
-  useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!photo?.uri) {
+      if (!product?.imageUri) {
         setLoading(false);
         return;
       }
       setLoading(true);
       try {
-        const size = await getImageSize(photo.uri);
+        const size = await getImageSize(product.imageUri);
         if (!cancelled) setImgSize(size);
       } catch (e) {
         if (!cancelled) {
-          Alert.alert('Error', e instanceof Error ? e.message : 'Could not load image size');
+          Alert.alert('Error', e instanceof Error ? e.message : 'Could not read the image size.');
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -186,9 +158,9 @@ export default function CropPhotoScreen() {
     return () => {
       cancelled = true;
     };
-  }, [photo?.uri]);
+  }, [product?.imageUri]);
 
-  // When aspect or minZoom changes, reset / clamp transform
+  // Reset the transform whenever the target aspect changes.
   useEffect(() => {
     const z = Math.max(minZoom, 1);
     scale.value = z;
@@ -223,8 +195,7 @@ export default function CropPhotoScreen() {
       startScale.value = scale.value;
     })
     .onUpdate((e) => {
-      const next = Math.min(6, Math.max(minZoom, startScale.value * e.scale));
-      scale.value = next;
+      scale.value = Math.min(6, Math.max(minZoom, startScale.value * e.scale));
     })
     .onEnd(() => {
       runOnJS(syncTransform)(translateX.value, translateY.value, scale.value);
@@ -255,44 +226,30 @@ export default function CropPhotoScreen() {
       zoom,
       tx,
       ty,
-      { x: frame.x, y: frame.y, w: frame.w, h: frame.h },
+      frame,
       { w: editorW, h: editorH }
     );
   }, [imgSize, fitScale, zoom, tx, ty, frame, editorW, editorH]);
 
-  // Result marker: how the crop will look in the PDF cell
+  /** How the crop will look once it lands in a PDF cell. */
   const resultPreview = useMemo(() => {
     if (!imgSize || !cropRect || !displayUri) return null;
     const maxSide = 120;
-    // PDF cell shape for current layout
-    const cellAspect = layout.columns && layout.rows
-      ? aspect
-      : aspect;
-    let rw: number;
-    let rh: number;
-    if (cellAspect >= 1) {
-      rw = maxSide;
-      rh = maxSide / cellAspect;
-    } else {
-      rh = maxSide;
-      rw = maxSide * cellAspect;
-    }
-    // Show crop region scaled into result box
-    const scaleX = rw / cropRect.width;
-    const scaleY = rh / cropRect.height;
-    const s = Math.max(scaleX, scaleY);
+    const boxW = aspect >= 1 ? maxSide : maxSide * aspect;
+    const boxH = aspect >= 1 ? maxSide / aspect : maxSide;
+    const s = Math.max(boxW / cropRect.width, boxH / cropRect.height);
     return {
-      boxW: rw,
-      boxH: rh,
+      boxW,
+      boxH,
       imgW: imgSize.width * s,
       imgH: imgSize.height * s,
       left: -cropRect.originX * s,
       top: -cropRect.originY * s,
     };
-  }, [imgSize, cropRect, displayUri, aspect, layout]);
+  }, [imgSize, cropRect, displayUri, aspect]);
 
   const onApply = useCallback(async () => {
-    // Sync latest shared values before save
+    // Read the live shared values — the JS mirror may lag a gesture.
     const rect =
       imgSize &&
       computeCropFromTransform(
@@ -302,22 +259,22 @@ export default function CropPhotoScreen() {
         scale.value,
         translateX.value,
         translateY.value,
-        { x: frame.x, y: frame.y, w: frame.w, h: frame.h },
+        frame,
         { w: editorW, h: editorH }
       );
-    if (!catalogId || !photoId || !rect) return;
+    if (!productId || !rect) return;
+
     setSaving(true);
     try {
-      await cropPhoto(photoId, catalogId, rect);
+      await cropProduct(productId, rect);
       router.back();
     } catch (e) {
-      Alert.alert('Crop failed', e instanceof Error ? e.message : 'Could not crop image');
+      Alert.alert('Crop failed', e instanceof Error ? e.message : 'Could not crop the image.');
     } finally {
       setSaving(false);
     }
   }, [
-    catalogId,
-    photoId,
+    productId,
     imgSize,
     fitScale,
     scale,
@@ -326,98 +283,55 @@ export default function CropPhotoScreen() {
     frame,
     editorW,
     editorH,
-    cropPhoto,
+    cropProduct,
     router,
   ]);
 
-  if (!photo || !displayUri) {
+  if (!product || !displayUri) {
     return (
       <View style={[styles.center, { backgroundColor: theme.background }]}>
-        {loading ? <ActivityIndicator color={theme.accent} /> : <ThemedText>Photo not found</ThemedText>}
+        {loading ? (
+          <ActivityIndicator color={theme.accent} />
+        ) : (
+          <ThemedText>This product is no longer available.</ThemedText>
+        )}
       </View>
     );
   }
 
   return (
-    <View style={[styles.screen, { backgroundColor: theme.background, paddingBottom: insets.bottom }]}>
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        keyboardShouldPersistTaps="handled"
-        scrollEnabled
-        nestedScrollEnabled>
+    <View
+      style={[styles.screen, { backgroundColor: theme.background, paddingBottom: insets.bottom }]}>
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <ThemedText themeColor="textSecondary" style={styles.hint}>
-          Drag to pan · pinch to zoom. The gold frame is what will be saved. The small card below
-          shows the result.
+          Drag to pan, pinch to zoom. The framed area is what gets saved — the card below shows
+          the result.
         </ThemedText>
 
-        {/* Dynamic crop editor */}
         <View
-          style={[
-            styles.editor,
-            {
-              width: editorW,
-              height: editorH,
-              backgroundColor: '#0a0a0a',
-              alignSelf: 'center',
-            },
-          ]}>
+          style={[styles.editor, { width: editorW, height: editorH, backgroundColor: '#0a0a0a' }]}>
           {loading || !imgSize ? (
             <ActivityIndicator color={theme.accent} style={{ margin: 'auto' }} />
           ) : (
             <GestureDetector gesture={composed}>
               <View style={{ width: editorW, height: editorH, overflow: 'hidden' }}>
-                <AnimatedImage
-                  source={{ uri: displayUri }}
-                  style={imageStyle}
-                  contentFit="fill"
-                />
-                {/* Dim layers around crop frame */}
+                <AnimatedImage source={{ uri: displayUri }} style={imageStyle} contentFit="fill" />
+
                 <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-                  {/* Top */}
+                  <View style={[styles.dim, { left: 0, right: 0, top: 0, height: frame.y }]} />
                   <View
-                    style={{
-                      position: 'absolute',
-                      left: 0,
-                      right: 0,
-                      top: 0,
-                      height: frame.y,
-                      backgroundColor: 'rgba(0,0,0,0.55)',
-                    }}
+                    style={[styles.dim, { left: 0, right: 0, top: frame.y + frame.h, bottom: 0 }]}
                   />
-                  {/* Bottom */}
                   <View
-                    style={{
-                      position: 'absolute',
-                      left: 0,
-                      right: 0,
-                      top: frame.y + frame.h,
-                      bottom: 0,
-                      backgroundColor: 'rgba(0,0,0,0.55)',
-                    }}
+                    style={[styles.dim, { left: 0, top: frame.y, width: frame.x, height: frame.h }]}
                   />
-                  {/* Left */}
                   <View
-                    style={{
-                      position: 'absolute',
-                      left: 0,
-                      top: frame.y,
-                      width: frame.x,
-                      height: frame.h,
-                      backgroundColor: 'rgba(0,0,0,0.55)',
-                    }}
+                    style={[
+                      styles.dim,
+                      { right: 0, top: frame.y, width: frame.x, height: frame.h },
+                    ]}
                   />
-                  {/* Right */}
-                  <View
-                    style={{
-                      position: 'absolute',
-                      right: 0,
-                      top: frame.y,
-                      width: frame.x,
-                      height: frame.h,
-                      backgroundColor: 'rgba(0,0,0,0.55)',
-                    }}
-                  />
-                  {/* Crop frame marker */}
+
                   <View
                     style={{
                       position: 'absolute',
@@ -428,36 +342,16 @@ export default function CropPhotoScreen() {
                       borderWidth: 2,
                       borderColor: theme.accent,
                     }}>
-                    {/* Rule of thirds */}
-                    <View
-                      style={[
-                        styles.gridLineH,
-                        { top: '33.33%', backgroundColor: 'rgba(255,255,255,0.25)' },
-                      ]}
-                    />
-                    <View
-                      style={[
-                        styles.gridLineH,
-                        { top: '66.66%', backgroundColor: 'rgba(255,255,255,0.25)' },
-                      ]}
-                    />
-                    <View
-                      style={[
-                        styles.gridLineV,
-                        { left: '33.33%', backgroundColor: 'rgba(255,255,255,0.25)' },
-                      ]}
-                    />
-                    <View
-                      style={[
-                        styles.gridLineV,
-                        { left: '66.66%', backgroundColor: 'rgba(255,255,255,0.25)' },
-                      ]}
-                    />
+                    <View style={[styles.gridLineH, { top: '33.33%' }]} />
+                    <View style={[styles.gridLineH, { top: '66.66%' }]} />
+                    <View style={[styles.gridLineV, { left: '33.33%' }]} />
+                    <View style={[styles.gridLineV, { left: '66.66%' }]} />
                     <View style={[styles.corner, styles.tl, { borderColor: theme.accent }]} />
                     <View style={[styles.corner, styles.tr, { borderColor: theme.accent }]} />
                     <View style={[styles.corner, styles.bl, { borderColor: theme.accent }]} />
                     <View style={[styles.corner, styles.br, { borderColor: theme.accent }]} />
                   </View>
+
                   <View
                     style={[
                       styles.frameLabel,
@@ -471,12 +365,15 @@ export default function CropPhotoScreen() {
           )}
         </View>
 
-        {/* Result marker — what it will look like on save / in PDF cell */}
-        <View style={[styles.resultCard, { backgroundColor: theme.backgroundElement, borderColor: theme.border }]}>
+        <View
+          style={[
+            styles.resultCard,
+            { backgroundColor: theme.backgroundElement, borderColor: theme.border },
+          ]}>
           <View style={styles.resultHeader}>
             <ThemedText style={styles.sectionLabel}>On save</ThemedText>
             <ThemedText themeColor="textSecondary" style={styles.resultSub}>
-              Preview of the cropped image
+              {product.formulaName} · {product.companyName}
             </ThemedText>
           </View>
           <View style={styles.resultRow}>
@@ -490,8 +387,13 @@ export default function CropPhotoScreen() {
                   backgroundColor: '#111',
                 },
               ]}>
-              {resultPreview && displayUri ? (
-                <View style={{ width: resultPreview.boxW, height: resultPreview.boxH, overflow: 'hidden' }}>
+              {resultPreview ? (
+                <View
+                  style={{
+                    width: resultPreview.boxW,
+                    height: resultPreview.boxH,
+                    overflow: 'hidden',
+                  }}>
                   <Image
                     source={{ uri: displayUri }}
                     style={{
@@ -519,20 +421,23 @@ export default function CropPhotoScreen() {
                 </ThemedText>
               ) : null}
               <ThemedText themeColor="textSecondary" style={styles.resultHint}>
-                This is exactly what the PDF cell will show after you apply.
+                This is exactly what the PDF cell will show.
               </ThemedText>
             </View>
           </View>
         </View>
 
         <ThemedText style={styles.sectionLabel}>Aspect ratio</ThemedText>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-          {presets.map((p) => {
-            const on = p.id === aspectId;
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.chips}>
+          {presets.map((preset) => {
+            const on = preset.id === aspectId;
             return (
               <Pressable
-                key={p.id}
-                onPress={() => setAspectId(p.id)}
+                key={preset.id}
+                onPress={() => setAspectId(preset.id)}
                 style={[
                   styles.chip,
                   {
@@ -541,11 +446,14 @@ export default function CropPhotoScreen() {
                   },
                 ]}>
                 <ThemedText style={[styles.chipTitle, { color: on ? '#1A1A1A' : theme.text }]}>
-                  {p.label}
+                  {preset.label}
                 </ThemedText>
                 <ThemedText
-                  style={[styles.chipHint, { color: on ? 'rgba(0,0,0,0.55)' : theme.textSecondary }]}>
-                  {p.hint}
+                  style={[
+                    styles.chipHint,
+                    { color: on ? 'rgba(0,0,0,0.55)' : theme.textSecondary },
+                  ]}>
+                  {preset.hint}
                 </ThemedText>
               </Pressable>
             );
@@ -553,7 +461,11 @@ export default function CropPhotoScreen() {
         </ScrollView>
       </ScrollView>
 
-      <View style={[styles.footer, { borderTopColor: theme.border, backgroundColor: theme.background }]}>
+      <View
+        style={[
+          styles.footer,
+          { borderTopColor: theme.border, backgroundColor: theme.background },
+        ]}>
         <Button title="Cancel" variant="ghost" onPress={() => router.back()} style={{ flex: 1 }} />
         <Button
           title="Apply crop"
@@ -570,31 +482,39 @@ export default function CropPhotoScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.four },
   scroll: {
     padding: Spacing.three,
     paddingBottom: Spacing.six,
     gap: Spacing.three,
+    alignItems: 'center',
   },
   hint: {
     fontSize: 14,
     lineHeight: 20,
+    alignSelf: 'stretch',
   },
   editor: {
     borderRadius: Radii.lg,
     overflow: 'hidden',
+  },
+  dim: {
+    position: 'absolute',
+    backgroundColor: 'rgba(0,0,0,0.55)',
   },
   gridLineH: {
     position: 'absolute',
     left: 0,
     right: 0,
     height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(255,255,255,0.25)',
   },
   gridLineV: {
     position: 'absolute',
     top: 0,
     bottom: 0,
     width: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(255,255,255,0.25)',
   },
   corner: {
     position: 'absolute',
@@ -620,6 +540,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   resultCard: {
+    alignSelf: 'stretch',
     borderRadius: Radii.lg,
     borderWidth: StyleSheet.hairlineWidth,
     padding: Spacing.three,
@@ -639,28 +560,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  resultMeta: {
-    flex: 1,
-    gap: 4,
-  },
-  resultTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  resultDesc: {
-    fontSize: 13,
-  },
-  resultSize: {
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  resultHint: {
-    fontSize: 12,
-    lineHeight: 17,
-    marginTop: 4,
-  },
+  resultMeta: { flex: 1, gap: 4 },
+  resultTitle: { fontSize: 16, fontWeight: '700' },
+  resultDesc: { fontSize: 13 },
+  resultSize: { fontSize: 12, fontWeight: '600', marginTop: 4 },
+  resultHint: { fontSize: 12, lineHeight: 17, marginTop: 4 },
   sectionLabel: {
+    alignSelf: 'stretch',
     fontSize: 13,
     fontWeight: '700',
     letterSpacing: 0.4,
@@ -669,6 +575,7 @@ const styles = StyleSheet.create({
   chips: {
     gap: Spacing.two,
     paddingVertical: 4,
+    alignItems: 'center',
   },
   chip: {
     borderRadius: Radii.md,
@@ -677,14 +584,8 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     minWidth: 96,
   },
-  chipTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  chipHint: {
-    fontSize: 11,
-    marginTop: 2,
-  },
+  chipTitle: { fontSize: 14, fontWeight: '700' },
+  chipHint: { fontSize: 11, marginTop: 2 },
   footer: {
     flexDirection: 'row',
     gap: Spacing.two,

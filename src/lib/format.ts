@@ -1,14 +1,17 @@
-export function formatPrice(price: number, currency: string): string {
-  try {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency: currency || 'USD',
-      maximumFractionDigits: 2,
-    }).format(price);
-  } catch {
-    return `${currency || 'USD'} ${price.toFixed(2)}`;
-  }
-}
+const MONTHS = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
 
 export function formatRelativeDate(iso: string): string {
   const date = new Date(iso);
@@ -22,6 +25,16 @@ export function formatRelativeDate(iso: string): string {
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d ago`;
   return date.toLocaleDateString();
+}
+
+/**
+ * "2 August 2026" — spelled out by hand rather than via `Intl` so the PDF
+ * reads the same on every device and locale.
+ */
+export function formatLongDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getDate()} ${MONTHS[date.getMonth()]} ${date.getFullYear()}`;
 }
 
 export function escapeHtml(value: string): string {
