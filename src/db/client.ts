@@ -54,6 +54,28 @@ const MIGRATIONS: readonly string[] = [
   ALTER TABLE companies ADD COLUMN address TEXT;
   ALTER TABLE companies ADD COLUMN phone TEXT;
   `,
+
+  // v3 — non-destructive crops. The framing is stored as 0..1 fractions of the
+  // master image instead of being burnt into the file, so the same shot can be
+  // re-derived for any grid cell. Existing rows have already been cropped
+  // destructively; they get a null crop, which reads as "full frame" — the
+  // image they have is the image they keep.
+  `
+  ALTER TABLE products ADD COLUMN crop_x REAL;
+  ALTER TABLE products ADD COLUMN crop_y REAL;
+  ALTER TABLE products ADD COLUMN crop_w REAL;
+  ALTER TABLE products ADD COLUMN crop_h REAL;
+  `,
+
+  // v4 — non-destructive rotation, and soft delete so a removal can be undone.
+  // A deleted row keeps its image file until it is purged, which is what makes
+  // "Undo" able to give the photo back rather than only the database row.
+  `
+  ALTER TABLE products ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE products ADD COLUMN deleted_at TEXT;
+
+  CREATE INDEX IF NOT EXISTS idx_products_deleted ON products(deleted_at);
+  `,
 ];
 
 let db: SQLite.SQLiteDatabase | null = null;

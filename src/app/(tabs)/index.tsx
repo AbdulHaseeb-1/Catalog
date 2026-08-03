@@ -1,9 +1,10 @@
 import { useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Pressable,
   ScrollView,
   StyleSheet,
   TextInput,
@@ -22,10 +23,15 @@ import { FabLayout, Screen, TabBar } from '@/constants/layout';
 import { Radii, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { confirmAction } from '@/lib/confirm';
+import { reportError, toMessage } from '@/lib/errors';
 import { matchesQuery, pluralize } from '@/lib/text';
 import { useLibraryStore } from '@/stores/library-store';
+import type { ProductWithRefs } from '@/types/models';
 
 const ALL = 'all';
+
+/** How long the undo bar stays after a delete. */
+const UNDO_WINDOW_MS = 7000;
 
 export default function ProductsScreen() {
   const theme = useTheme();
@@ -35,12 +41,24 @@ export default function ProductsScreen() {
   const products = useLibraryStore((s) => s.products);
   const companies = useLibraryStore((s) => s.companies);
   const status = useLibraryStore((s) => s.status);
+  const storeError = useLibraryStore((s) => s.error);
   const refresh = useLibraryStore((s) => s.refresh);
+  const clearError = useLibraryStore((s) => s.clearError);
   const removeProduct = useLibraryStore((s) => s.removeProduct);
+  const undoRemoveProducts = useLibraryStore((s) => s.undoRemoveProducts);
+  const applyFramingTo = useLibraryStore((s) => s.applyFramingTo);
 
   const [query, setQuery] = useState('');
   const [companyId, setCompanyId] = useState<string>(ALL);
   const [refreshing, setRefreshing] = useState(false);
+  /** Pending undo for the last delete — cleared on a timer. */
+  const [undo, setUndo] = useState<{ ids: string[]; label: string } | null>(null);
+
+  useEffect(() => {
+    if (!undo) return;
+    const timer = setTimeout(() => setUndo(null), UNDO_WINDOW_MS);
+    return () => clearTimeout(timer);
+  }, [undo]);
 
   const columns = width >= 700 ? 4 : width >= 480 ? 3 : 2;
   const contentWidth = Math.min(width, Screen.maxWidth);
@@ -60,38 +78,72 @@ export default function ProductsScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
+    clearError();
     try {
       await refresh();
+    } catch (e) {
+      // refresh() already records the failure; this is belt and braces so a
+      // pull-to-refresh can never end as an unhandled rejection.
+      reportError('library', e);
     } finally {
       setRefreshing(false);
     }
-  }, [refresh]);
+  }, [refresh, clearError]);
 
-  const openActions = (id: string, title: string) => {
+  /** Copy one product's framing onto the rest of its company's range. */
+  const shareFraming = async (product: ProductWithRefs) => {
+    const siblings = products.filter(
+      (p) => p.companyId === product.companyId && p.id !== product.id
+    );
+    if (!siblings.length) {
+      return Alert.alert('Nothing to apply to', 'This company has no other products yet.');
+    }
+    const ok = await confirmAction(
+      `Use this framing for ${pluralize(siblings.length, 'product')}?`,
+      'Pack shots taken on the same rig usually want the same crop. Nothing is re-cut — each product keeps its own photo and can be re-cropped later.'
+    );
+    if (!ok) return;
+    try {
+      await applyFramingTo(
+        siblings.map((p) => p.id),
+        { crop: product.crop, rotation: product.rotation }
+      );
+    } catch (e) {
+      Alert.alert('Could not apply that framing', toMessage(e));
+    }
+  };
+
+  const openActions = (product: ProductWithRefs) => {
+    const title = `${product.formulaName} · ${product.companyName}`;
     Alert.alert(title, undefined, [
-      { text: 'Edit', onPress: () => router.push(`/product/${id}`) },
+      { text: 'Edit', onPress: () => router.push(`/product/${product.id}`) },
+      { text: 'Use framing for this company', onPress: () => void shareFraming(product) },
       {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          const ok = await confirmAction(
-            'Delete product?',
-            'The product and its image are removed from this device.'
-          );
-          if (ok) {
-            try {
-              await removeProduct(id);
-            } catch (e) {
-              Alert.alert(
-                'Could not delete',
-                e instanceof Error ? e.message : 'Unknown error'
-              );
-            }
+          try {
+            await removeProduct(product.id);
+            // Soft deleted, so this is offered instead of a confirm up front.
+            setUndo({ ids: [product.id], label: product.formulaName });
+          } catch (e) {
+            Alert.alert('Could not delete', toMessage(e));
           }
         },
       },
       { text: 'Cancel', style: 'cancel' },
     ]);
+  };
+
+  const runUndo = async () => {
+    if (!undo) return;
+    const target = undo;
+    setUndo(null);
+    try {
+      await undoRemoveProducts(target.ids);
+    } catch (e) {
+      Alert.alert('Could not restore', toMessage(e));
+    }
   };
 
   const listBottomPad = TabBar.contentInset + FabLayout.listClearance;
@@ -115,6 +167,27 @@ export default function ProductsScreen() {
             }
           />
         </View>
+
+        {storeError ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss error"
+            onPress={clearError}
+            style={{ paddingHorizontal: padX, paddingBottom: Spacing.two }}>
+            <View
+              style={[
+                styles.banner,
+                { backgroundColor: theme.bubble, borderColor: theme.danger },
+              ]}>
+              <ThemedText style={[styles.bannerText, { color: theme.danger }]}>
+                {storeError}
+              </ThemedText>
+              <ThemedText themeColor="textSecondary" style={styles.bannerHint}>
+                Tap to dismiss · pull down to reload
+              </ThemedText>
+            </View>
+          </Pressable>
+        ) : null}
 
         {hasProducts ? (
           <>
@@ -202,15 +275,32 @@ export default function ProductsScreen() {
                 <ProductTile
                   product={item}
                   onPress={() => router.push(`/product/${item.id}`)}
-                  onLongPress={() =>
-                    openActions(item.id, `${item.formulaName} · ${item.companyName}`)
-                  }
+                  onLongPress={() => openActions(item)}
                 />
               </View>
             )}
           />
         )}
       </View>
+
+      {undo ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={runUndo}
+          style={[
+            styles.undo,
+            {
+              bottom: TabBar.contentInset,
+              backgroundColor: theme.backgroundElement,
+              borderColor: theme.border,
+            },
+          ]}>
+          <ThemedText style={styles.undoText} numberOfLines={1}>
+            {undo.label} deleted
+          </ThemedText>
+          <ThemedText style={[styles.undoAction, { color: theme.primary }]}>UNDO</ThemedText>
+        </Pressable>
+      ) : null}
 
       <View
         style={[styles.fabSlot, { right: FabLayout.right, bottom: FabLayout.aboveTabBar }]}
@@ -219,7 +309,8 @@ export default function ProductsScreen() {
           icon="＋"
           label="Product"
           onPress={() => router.push('/product/new')}
-          accessibilityLabel="Add product"
+          onLongPress={() => router.push('/product/bulk')}
+          accessibilityLabel="Add product. Long press to import several photos at once."
         />
       </View>
     </SafeAreaView>
@@ -234,6 +325,20 @@ const styles = StyleSheet.create({
     maxWidth: Screen.maxWidth,
     alignSelf: 'center',
   },
+  undo: {
+    position: 'absolute',
+    left: Spacing.three,
+    right: Spacing.three,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two + 2,
+    borderRadius: Radii.md,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  undoText: { flex: 1, fontSize: 13.5 },
+  undoAction: { fontSize: 13, fontWeight: '800', letterSpacing: 0.6 },
   search: {
     minHeight: 46,
     borderRadius: Radii.lg,
@@ -256,6 +361,20 @@ const styles = StyleSheet.create({
   },
   noMatch: {
     fontSize: 15,
+  },
+  banner: {
+    borderRadius: Radii.md,
+    borderWidth: 1,
+    padding: Spacing.three,
+    gap: 2,
+  },
+  bannerText: {
+    fontSize: 13.5,
+    fontWeight: '600',
+    lineHeight: 19,
+  },
+  bannerHint: {
+    fontSize: 12,
   },
   fabSlot: {
     position: 'absolute',

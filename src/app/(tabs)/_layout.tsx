@@ -1,9 +1,14 @@
-import { Tabs } from 'expo-router';
+import { Tabs, type ErrorBoundaryProps } from 'expo-router';
 import { StyleSheet, Text, View, type ColorValue } from 'react-native';
 
+import { RouteErrorBoundary } from '@/components/route-error-boundary';
 import { TabBar } from '@/constants/layout';
 import { Colors, Elevation, Radii } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+
+export function ErrorBoundary(props: ErrorBoundaryProps) {
+  return <RouteErrorBoundary {...props} where="tabs" />;
+}
 
 /** Filled glyph when focused, outline when not — tinted by the tab bar. */
 const ICONS: Record<string, { on: string; off: string }> = {
@@ -26,8 +31,7 @@ function TabIcon({ name, focused, color }: { name: string; focused: boolean; col
 }
 
 export default function TabsLayout() {
-  const scheme = useColorScheme();
-  const theme = Colors[scheme === 'unspecified' ? 'light' : scheme];
+  const theme = Colors[useColorScheme()];
 
   const icon =
     (name: string) =>

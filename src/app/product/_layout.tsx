@@ -1,6 +1,11 @@
-import { Stack } from 'expo-router';
+import { Stack, type ErrorBoundaryProps } from 'expo-router';
 
+import { RouteErrorBoundary } from '@/components/route-error-boundary';
 import { useTheme } from '@/hooks/use-theme';
+
+export function ErrorBoundary(props: ErrorBoundaryProps) {
+  return <RouteErrorBoundary {...props} where="product stack" />;
+}
 
 export default function ProductLayout() {
   const theme = useTheme();
@@ -16,11 +21,8 @@ export default function ProductLayout() {
         contentStyle: { backgroundColor: theme.background },
       }}>
       <Stack.Screen name="new" options={{ title: 'Add product' }} />
+      <Stack.Screen name="bulk" options={{ title: 'Import photos' }} />
       <Stack.Screen name="[productId]/index" options={{ title: 'Product' }} />
-      <Stack.Screen
-        name="[productId]/crop"
-        options={{ title: 'Crop image', presentation: 'modal' }}
-      />
     </Stack>
   );
 }

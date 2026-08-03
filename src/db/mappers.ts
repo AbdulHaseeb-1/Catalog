@@ -1,3 +1,5 @@
+import { clampNormalized, type NormalizedRect } from '@/lib/crop-geometry';
+import { asRotation } from '@/types/models';
 import type {
   Company,
   CompanyListItem,
@@ -38,12 +40,29 @@ export type ProductRow = {
   image_uri: string;
   width: number | null;
   height: number | null;
+  crop_x: number | null;
+  crop_y: number | null;
+  crop_w: number | null;
+  crop_h: number | null;
+  rotation: number | null;
+  deleted_at: string | null;
   sort_order: number;
   created_at: string;
   updated_at: string;
   company_name?: string;
   formula_name?: string;
 };
+
+/** A crop only counts when all four fractions are present and usable. */
+function mapCrop(row: ProductRow): NormalizedRect | null {
+  const { crop_x: x, crop_y: y, crop_w: w, crop_h: h } = row;
+  if (x == null || y == null || w == null || h == null) return null;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) {
+    return null;
+  }
+  if (w <= 0 || h <= 0) return null;
+  return clampNormalized({ x, y, w, h });
+}
 
 export function mapCompany(row: CompanyRow): Company {
   return {
@@ -91,6 +110,8 @@ export function mapProduct(row: ProductRow): Product {
     imageUri: row.image_uri,
     width: row.width,
     height: row.height,
+    crop: mapCrop(row),
+    rotation: asRotation(row.rotation),
     sortOrder: row.sort_order,
     createdAt: row.created_at,
     updatedAt: row.updated_at,

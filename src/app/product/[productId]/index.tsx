@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { confirmAction } from '@/lib/confirm';
+import { reportError, toMessage } from '@/lib/errors';
 import { useLibraryStore } from '@/stores/library-store';
 
 function param(value: string | string[] | undefined): string | undefined {
@@ -41,7 +42,8 @@ export default function EditProductScreen() {
       await removeProduct(productId);
       router.back();
     } catch (e) {
-      Alert.alert('Could not delete', e instanceof Error ? e.message : 'Unknown error');
+      reportError('library', e);
+      Alert.alert('Could not delete', toMessage(e));
     }
   };
 
@@ -52,18 +54,27 @@ export default function EditProductScreen() {
       initialCompanyId={product.companyId}
       initialFormulaId={product.formulaId}
       initialImageUri={product.imageUri}
+      initialCrop={product.crop}
+      initialImageSize={
+        product.width && product.height
+          ? { width: product.width, height: product.height }
+          : null
+      }
+      initialRotation={product.rotation}
       submitLabel="Save changes"
-      onSubmit={async ({ companyId, formulaId, sourceUri }) => {
-        await editProduct(productId, { companyId, formulaId, sourceUri });
+      onSubmit={async ({ companyId, formulaId, sourceUri, crop, sourceSize, rotation }) => {
+        await editProduct(productId, {
+          companyId,
+          formulaId,
+          sourceUri,
+          crop,
+          sourceSize,
+          rotation,
+        });
         router.back();
       }}
       footer={
         <View style={styles.footer}>
-          <Button
-            title="Crop image"
-            variant="ghost"
-            onPress={() => router.push(`/product/${productId}/crop`)}
-          />
           <Button title="Delete product" variant="danger" onPress={onDelete} />
         </View>
       }

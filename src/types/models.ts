@@ -1,3 +1,5 @@
+import type { NormalizedRect } from '@/lib/crop-geometry';
+
 export type UUID = string;
 export type PageSize = 'A4' | 'Letter';
 
@@ -32,17 +34,47 @@ export interface Formula {
 
 /**
  * A product is exactly three things: a company, a formula, and a pack shot.
+ *
+ * `imageUri` is the master image and is never overwritten by cropping. What
+ * the user framed lives in `crop` as fractions of that master, and the rect
+ * that actually gets rendered is derived per export layout — see
+ * `lib/crop-geometry`. Baking the crop into the pixels would mean a shot
+ * framed for a 2-per-row grid gets centre-chopped by a 4-per-row grid with no
+ * way back.
  */
 export interface Product {
   id: UUID;
   companyId: UUID;
   formulaId: UUID;
+  /** Master image — full frame, as imported. */
   imageUri: string;
+  /** Pixel size of the master, needed to turn `crop` back into pixels. */
   width: number | null;
   height: number | null;
+  /** User's framing, in 0..1 fractions of the master. Null means full frame. */
+  crop: NormalizedRect | null;
+  /** Clockwise quarter turns applied before the crop: 0, 90, 180 or 270. */
+  rotation: Rotation;
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export type Rotation = 0 | 90 | 180 | 270;
+
+export function asRotation(value: number | null | undefined): Rotation {
+  const turns = ((Math.round((value ?? 0) / 90) % 4) + 4) % 4;
+  return (turns * 90) as Rotation;
+}
+
+/** Rotating by a quarter turn swaps the frame's width and height. */
+export function rotatedSize(
+  size: { width: number; height: number },
+  rotation: Rotation
+): { width: number; height: number } {
+  return rotation === 90 || rotation === 270
+    ? { width: size.height, height: size.width }
+    : size;
 }
 
 /** Product joined with the names of its company and formula (for lists). */
@@ -109,6 +141,8 @@ export interface CreateProductInput {
   imageUri: string;
   width?: number | null;
   height?: number | null;
+  crop?: NormalizedRect | null;
+  rotation?: Rotation;
 }
 
 export interface UpdateProductInput {
@@ -117,6 +151,9 @@ export interface UpdateProductInput {
   imageUri?: string;
   width?: number | null;
   height?: number | null;
+  /** Pass `null` to clear the crop back to the full frame. */
+  crop?: NormalizedRect | null;
+  rotation?: Rotation;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -276,4 +313,37 @@ export function pageDimensions(settings: {
   }
   if (settings.pageSize === 'Letter') return { width: 612, height: 792 };
   return { width: 595, height: 842 }; // A4
+}
+
+/** Height of the contact strip at the foot of an image page, in points. */
+export const PDF_CONTACT_BOX_HEIGHT = 54;
+
+/**
+ * Size of one grid cell in points — the shape every pack shot is rendered
+ * into. The contact strip eats into the grid rather than overlapping it, so a
+ * page that carries one has slightly shorter cells; ignoring that would make
+ * the crop editor's "exact fit" preset quietly inexact.
+ */
+export function gridCellSize(opts: {
+  layoutId: LayoutId | string;
+  pageSize: PageSize;
+  contactBox?: boolean;
+}): { width: number; height: number } {
+  const meta = layoutMeta(opts.layoutId);
+  const page = pageDimensions(opts);
+  const gridHeight = opts.contactBox ? page.height - PDF_CONTACT_BOX_HEIGHT : page.height;
+  return {
+    width: page.width / Math.max(1, meta.columns),
+    height: gridHeight / Math.max(1, meta.rows),
+  };
+}
+
+/** Aspect (W/H) of one grid cell. */
+export function cellAspectRatio(opts: {
+  layoutId: LayoutId | string;
+  pageSize: PageSize;
+  contactBox?: boolean;
+}): number {
+  const cell = gridCellSize(opts);
+  return cell.width / cell.height;
 }

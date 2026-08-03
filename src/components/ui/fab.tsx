@@ -7,6 +7,7 @@ type Props = {
   icon: string;
   label?: string;
   onPress: () => void;
+  onLongPress?: () => void;
   style?: StyleProp<ViewStyle>;
   variant?: 'primary' | 'secondary' | 'danger';
   accessibilityLabel?: string;
@@ -16,6 +17,7 @@ export function Fab({
   icon,
   label,
   onPress,
+  onLongPress,
   style,
   variant = 'primary',
   accessibilityLabel,
@@ -30,6 +32,7 @@ export function Fab({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? label ?? icon}
       onPress={onPress}
+      onLongPress={onLongPress}
       style={({ pressed }) => [
         styles.fab,
         Elevation.fab,

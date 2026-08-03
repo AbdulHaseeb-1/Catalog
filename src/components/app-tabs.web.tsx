@@ -1,15 +1,14 @@
 import { Tabs, TabList, TabTrigger, TabSlot } from 'expo-router/ui';
-import { useColorScheme } from 'react-native';
 
 import { Colors } from '@/constants/theme';
+import { useColorScheme } from '@/hooks/use-color-scheme';
 
 /**
  * Legacy web tabs shim (unused — root uses app/(tabs)/_layout.tsx).
  * Kept so typedRoutes/build does not break on old imports.
  */
 export default function AppTabs() {
-  const scheme = useColorScheme();
-  const colors = Colors[scheme === 'unspecified' ? 'light' : scheme];
+  const colors = Colors[useColorScheme()];
 
   return (
     <Tabs>

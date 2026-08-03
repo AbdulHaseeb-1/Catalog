@@ -15,6 +15,7 @@ import { FabLayout, Screen, TabBar } from '@/constants/layout';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { confirmAction } from '@/lib/confirm';
+import { reportError, toMessage } from '@/lib/errors';
 import { pluralize } from '@/lib/text';
 import { useLibraryStore } from '@/stores/library-store';
 
@@ -157,7 +158,7 @@ export function ReferenceListScreen({ kind }: { kind: Kind }) {
       setSheetOpen(false);
       setName('');
     } catch (e) {
-      setError(e instanceof Error ? e.message : `Could not save that ${copy.noun}.`);
+      setError(toMessage(e, `Could not save that ${copy.noun}.`));
     } finally {
       setSaving(false);
     }
@@ -173,7 +174,8 @@ export function ReferenceListScreen({ kind }: { kind: Kind }) {
       if (kind === 'company') await removeCompany(entry.id);
       else await removeFormula(entry.id);
     } catch (e) {
-      Alert.alert('Could not delete', e instanceof Error ? e.message : 'Unknown error');
+      reportError('library', e);
+      Alert.alert('Could not delete', toMessage(e));
     }
   };
 

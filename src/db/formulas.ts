@@ -11,9 +11,12 @@ function nowIso() {
 
 const LIST_SQL = `
   SELECT f.*,
-    (SELECT COUNT(*) FROM products p WHERE p.formula_id = f.id) AS product_count,
-    (SELECT COUNT(DISTINCT p.company_id) FROM products p WHERE p.formula_id = f.id) AS company_count,
-    (SELECT p.image_uri FROM products p WHERE p.formula_id = f.id
+    (SELECT COUNT(*) FROM products p
+      WHERE p.formula_id = f.id AND p.deleted_at IS NULL) AS product_count,
+    (SELECT COUNT(DISTINCT p.company_id) FROM products p
+      WHERE p.formula_id = f.id AND p.deleted_at IS NULL) AS company_count,
+    (SELECT p.image_uri FROM products p
+      WHERE p.formula_id = f.id AND p.deleted_at IS NULL
       ORDER BY p.sort_order ASC, p.created_at ASC LIMIT 1) AS cover_uri
   FROM formulas f
 `;
@@ -98,6 +101,33 @@ export async function deleteFormula(id: string): Promise<string[]> {
   );
   await db.runAsync(`DELETE FROM formulas WHERE id = ?`, id);
   return images.map((row) => row.image_uri);
+}
+
+/**
+ * Fold one formula into another, moving its products across. Formulas are the
+ * axis a whole catalogue can be grouped by, so a stray near-duplicate splits
+ * one composition into two sections.
+ */
+export async function mergeFormulas(fromId: string, intoId: string): Promise<number> {
+  if (fromId === intoId) throw new Error('Pick two different formulas.');
+
+  const [from, into] = await Promise.all([getFormula(fromId), getFormula(intoId)]);
+  if (!from || !into) throw new Error('One of those formulas no longer exists.');
+
+  const db = await getDatabase();
+  const ts = nowIso();
+  let moved = 0;
+
+  await db.withTransactionAsync(async () => {
+    const result = await db.runAsync(
+      `UPDATE products SET formula_id = ?, updated_at = ? WHERE formula_id = ?`,
+      [intoId, ts, fromId]
+    );
+    moved = result.changes ?? 0;
+    await db.runAsync(`DELETE FROM formulas WHERE id = ?`, fromId);
+  });
+
+  return moved;
 }
 
 export async function countFormulas(): Promise<number> {

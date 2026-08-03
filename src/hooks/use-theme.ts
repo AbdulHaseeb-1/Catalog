@@ -7,8 +7,8 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export function useTheme() {
-  const scheme = useColorScheme();
-  const theme = scheme === 'unspecified' ? 'light' : scheme;
-
-  return Colors[theme];
+  // useColorScheme() is normalised to 'light' | 'dark', so this lookup can
+  // never produce undefined. Every screen reads `theme.<colour>` directly, so
+  // an undefined palette here crashes the entire app.
+  return Colors[useColorScheme()];
 }

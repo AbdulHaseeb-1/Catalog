@@ -16,9 +16,12 @@ function nowIso() {
 
 const LIST_SQL = `
   SELECT c.*,
-    (SELECT COUNT(*) FROM products p WHERE p.company_id = c.id) AS product_count,
-    (SELECT COUNT(DISTINCT p.formula_id) FROM products p WHERE p.company_id = c.id) AS formula_count,
-    (SELECT p.image_uri FROM products p WHERE p.company_id = c.id
+    (SELECT COUNT(*) FROM products p
+      WHERE p.company_id = c.id AND p.deleted_at IS NULL) AS product_count,
+    (SELECT COUNT(DISTINCT p.formula_id) FROM products p
+      WHERE p.company_id = c.id AND p.deleted_at IS NULL) AS formula_count,
+    (SELECT p.image_uri FROM products p
+      WHERE p.company_id = c.id AND p.deleted_at IS NULL
       ORDER BY p.sort_order ASC, p.created_at ASC LIMIT 1) AS cover_uri
   FROM companies c
 `;
@@ -125,6 +128,57 @@ export async function deleteCompany(id: string): Promise<string[]> {
   );
   await db.runAsync(`DELETE FROM companies WHERE id = ?`, id);
   return images.map((row) => row.image_uri);
+}
+
+/**
+ * Fold one company into another: its products move across, then the empty
+ * shell is dropped. `name_key` only blocks exact repeats, so near-duplicates
+ * like "Acme Pharma" and "Acme Pharma Ltd" otherwise split a range across two
+ * sections of the catalogue.
+ */
+export async function mergeCompanies(fromId: string, intoId: string): Promise<number> {
+  if (fromId === intoId) throw new Error('Pick two different companies.');
+
+  const [from, into] = await Promise.all([getCompany(fromId), getCompany(intoId)]);
+  if (!from || !into) throw new Error('One of those companies no longer exists.');
+
+  const db = await getDatabase();
+  const ts = nowIso();
+  let moved = 0;
+
+  await db.withTransactionAsync(async () => {
+    // Continue the target's numbering so the merged range keeps a stable order.
+    const max = await db.getFirstAsync<{ m: number | null }>(
+      `SELECT MAX(sort_order) AS m FROM products WHERE company_id = ?`,
+      intoId
+    );
+    let next = (max?.m ?? -1) + 1;
+
+    const rows = await db.getAllAsync<{ id: string }>(
+      `SELECT id FROM products WHERE company_id = ? ORDER BY sort_order ASC, created_at ASC`,
+      fromId
+    );
+
+    for (const row of rows) {
+      await db.runAsync(
+        `UPDATE products SET company_id = ?, sort_order = ?, updated_at = ? WHERE id = ?`,
+        [intoId, next, ts, row.id]
+      );
+      next += 1;
+      moved += 1;
+    }
+
+    // Keep any detail the surviving record is missing rather than losing it.
+    await db.runAsync(
+      `UPDATE companies
+         SET address = COALESCE(address, ?), phone = COALESCE(phone, ?), updated_at = ?
+       WHERE id = ?`,
+      [from.address, from.phone, ts, intoId]
+    );
+    await db.runAsync(`DELETE FROM companies WHERE id = ?`, fromId);
+  });
+
+  return moved;
 }
 
 export async function countCompanies(): Promise<number> {

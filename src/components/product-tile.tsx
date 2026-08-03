@@ -1,6 +1,6 @@
-import { Image } from 'expo-image';
 import { Pressable, StyleSheet, View } from 'react-native';
 
+import { CroppedImage } from '@/components/cropped-image';
 import { ThemedText } from '@/components/themed-text';
 import { Radii, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -50,7 +50,20 @@ export function ProductTile({
           },
         ]}>
         {uri ? (
-          <Image source={{ uri }} style={styles.image} contentFit="cover" transition={120} />
+          // Square tile, so the crop is reshaped to 1:1 exactly as an export
+          // cell would — the tile and the printed page agree.
+          <CroppedImage
+            uri={uri}
+            crop={product.crop}
+            sourceSize={
+              product.width && product.height
+                ? { width: product.width, height: product.height }
+                : null
+            }
+            rotation={product.rotation}
+            aspect={1}
+            style={styles.image}
+          />
         ) : (
           <View style={styles.placeholder}>
             <ThemedText themeColor="textSecondary" style={styles.placeholderIcon}>

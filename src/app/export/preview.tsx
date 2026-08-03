@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Screen } from '@/constants/layout';
 import { Radii, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { reportError, toMessage } from '@/lib/errors';
 import { pluralize } from '@/lib/text';
 import { buildPreviewHtml, generatePdf, sharePdf } from '@/services/pdf-service';
 import { useLibraryStore } from '@/stores/library-store';
@@ -71,7 +72,8 @@ export default function ExportPreviewScreen() {
       setPageCount(result.pageCount);
     } catch (e) {
       setHtml(null);
-      setError(e instanceof Error ? e.message : 'Could not build the preview.');
+      reportError('pdf', e);
+      setError(toMessage(e, 'Could not build the preview.'));
     } finally {
       setLoading(false);
     }
@@ -100,7 +102,7 @@ export default function ExportPreviewScreen() {
       }
     } catch (e) {
       setMessage({
-        text: e instanceof Error ? e.message : 'PDF generation failed.',
+        text: toMessage(e, 'PDF generation failed.'),
         failed: true,
       });
     } finally {
@@ -113,7 +115,8 @@ export default function ExportPreviewScreen() {
     try {
       await sharePdf(pdfUri);
     } catch (e) {
-      setMessage({ text: e instanceof Error ? e.message : 'Sharing failed.', failed: true });
+      reportError('pdf', e);
+      setMessage({ text: toMessage(e, 'Sharing failed.'), failed: true });
     }
   };
 

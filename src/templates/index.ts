@@ -4,6 +4,7 @@ import {
 } from '@/constants/brand-logo';
 import { escapeHtml, formatLongDate } from '@/lib/format';
 import {
+  PDF_CONTACT_BOX_HEIGHT,
   hasContactDetails,
   layoutMeta,
   type BrandContact,
@@ -410,8 +411,11 @@ function emptyCell(w: number, h: number, borders: { right: boolean; bottom: bool
   return `<td width="${w}" height="${h}" style="width:${w}px;height:${h}px;margin:0;padding:0;${borderCss};background:#fff;box-sizing:border-box;"></td>`;
 }
 
-/** Height of the contact strip at the foot of an image page. */
-const CONTACT_BOX_HEIGHT = 54;
+/**
+ * Height of the contact strip at the foot of an image page. Shared with the
+ * crop editor, which has to know the true cell height to frame against.
+ */
+const CONTACT_BOX_HEIGHT = PDF_CONTACT_BOX_HEIGHT;
 
 /**
  * Your details, at the foot of every image page — the page is otherwise a
@@ -450,7 +454,11 @@ function renderContactBox(contact: BrandContact, pageWidth: number): string {
     </table>`;
 }
 
-/** Full-bleed grid of pack shots, auto-cropped to fill each cell. */
+/**
+ * Full-bleed grid of pack shots. Each image arrives already rendered to this
+ * layout's cell aspect, so the `object-fit: cover` in `imgCell` is only a
+ * safety net for products whose source size was never recorded.
+ */
 function renderGridPage(
   ctx: PdfRenderContext,
   group: Product[],
@@ -478,7 +486,7 @@ function renderGridPage(
       const product = group[index];
       if (product) {
         index += 1;
-        cells.push(imgCell(resolveImage(product.imageUri), w, h, borders));
+        cells.push(imgCell(resolveImage(product), w, h, borders));
       } else {
         cells.push(emptyCell(w, h, borders));
       }

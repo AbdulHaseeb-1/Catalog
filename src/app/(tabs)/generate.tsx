@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -11,9 +11,10 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Screen, TabBar } from '@/constants/layout';
 import { Elevation, Radii, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { runSafely } from '@/lib/errors';
 import { pluralize } from '@/lib/text';
 import { useLibraryStore } from '@/stores/library-store';
-import { hasContactDetails, LAYOUTS, type PageSize } from '@/types/models';
+import { hasContactDetails, LAYOUTS, type ExportSettings, type PageSize } from '@/types/models';
 
 type SheetMode = 'company' | 'formula' | null;
 
@@ -29,6 +30,17 @@ export default function GenerateScreen() {
   const contact = useLibraryStore((s) => s.brandContact);
 
   const [sheet, setSheet] = useState<SheetMode>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  /**
+   * Every control on this screen writes to SQLite. Called bare from an
+   * `onPress` the promise would float, so a failed write used to disappear
+   * entirely and the toggle would quietly snap back on the next launch.
+   */
+  const applySetting = useCallback((patch: Partial<ExportSettings>) => {
+    setSaveError(null);
+    runSafely('library', () => setExportSettings(patch), setSaveError);
+  }, [setExportSettings]);
 
   const companyOptions = useMemo(
     () =>
@@ -149,7 +161,7 @@ export default function GenerateScreen() {
                     key={layout.id}
                     label={layout.name}
                     selected={settings.layoutId === layout.id}
-                    onPress={() => setExportSettings({ layoutId: layout.id })}
+                    onPress={() => applySetting({ layoutId: layout.id })}
                   />
                 ))}
               </View>
@@ -165,7 +177,7 @@ export default function GenerateScreen() {
                     key={size}
                     label={size}
                     selected={settings.pageSize === size}
-                    onPress={() => setExportSettings({ pageSize: size })}
+                    onPress={() => applySetting({ pageSize: size })}
                   />
                 ))}
               </View>
@@ -176,21 +188,21 @@ export default function GenerateScreen() {
                 label="Brand cover page"
                 hint="Logo, title and what the catalogue covers."
                 value={settings.includeCover}
-                onChange={(includeCover) => setExportSettings({ includeCover })}
+                onChange={(includeCover) => applySetting({ includeCover })}
               />
               <Divider />
               <ToggleRow
                 label="Contents page"
                 hint="Lists every section. Skipped for single-section catalogues."
                 value={settings.includeContents}
-                onChange={(includeContents) => setExportSettings({ includeContents })}
+                onChange={(includeContents) => applySetting({ includeContents })}
               />
               <Divider />
               <ToggleRow
                 label="Section label pages"
                 hint="Introduces each company or formula before its images."
                 value={settings.includeSectionLabels}
-                onChange={(includeSectionLabels) => setExportSettings({ includeSectionLabels })}
+                onChange={(includeSectionLabels) => applySetting({ includeSectionLabels })}
               />
               <Divider />
               <ToggleRow
@@ -202,9 +214,15 @@ export default function GenerateScreen() {
                 }
                 value={settings.includeContactBox && hasContactDetails(contact)}
                 disabled={!hasContactDetails(contact)}
-                onChange={(includeContactBox) => setExportSettings({ includeContactBox })}
+                onChange={(includeContactBox) => applySetting({ includeContactBox })}
               />
             </Section>
+
+            {saveError ? (
+              <ThemedText style={[styles.saveError, { color: theme.danger }]}>
+                {saveError}
+              </ThemedText>
+            ) : null}
           </>
         )}
       </ScrollView>
@@ -401,6 +419,12 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     paddingHorizontal: Spacing.two,
     paddingBottom: Spacing.two,
+  },
+  saveError: {
+    fontSize: 13.5,
+    fontWeight: '600',
+    lineHeight: 19,
+    paddingHorizontal: Spacing.one,
   },
   toggleDisabled: {
     opacity: 0.5,

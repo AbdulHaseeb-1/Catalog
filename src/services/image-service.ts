@@ -3,7 +3,9 @@ import { ImageManipulator, SaveFormat, type ImageRef } from 'expo-image-manipula
 import * as ImagePicker from 'expo-image-picker';
 import { Platform } from 'react-native';
 
+import type { PixelRect } from '@/lib/crop-geometry';
 import { createId } from '@/lib/id';
+import type { Rotation } from '@/types/models';
 
 const IMAGES_ROOT = 'images';
 const PRODUCTS_FOLDER = `${IMAGES_ROOT}/products`;
@@ -12,16 +14,9 @@ const BASE64 = 'base64' as const;
 /** Longest edge kept on disk — plenty for print, small enough to stay fast. */
 const STORED_MAX_WIDTH = 1600;
 const STORED_QUALITY = 0.85;
-/** Downscale used when embedding into PDF HTML, to keep memory in check. */
+/** Upper bound when embedding into PDF HTML, to keep memory in check. */
 const PDF_MAX_WIDTH = 1100;
 const PDF_QUALITY = 0.72;
-
-export type CropRect = {
-  originX: number;
-  originY: number;
-  width: number;
-  height: number;
-};
 
 export type SavedImage = {
   /** Path stored in the database — relative on native, a data URI on web. */
@@ -80,9 +75,14 @@ async function ensureDir(path: string): Promise<void> {
  */
 async function renderImage(
   source: string,
-  opts: { crop?: CropRect; maxWidth?: number } = {}
+  opts: { rotation?: Rotation; crop?: PixelRect | null; maxWidth?: number } = {}
 ): Promise<ImageRef> {
   const context = ImageManipulator.manipulate(source);
+  // Rotation runs first: a crop is always expressed against the upright image,
+  // which is what the editor showed when the rect was drawn.
+  if (opts.rotation) {
+    context.rotate(opts.rotation);
+  }
   if (opts.crop) {
     context.crop({
       originX: Math.max(0, Math.round(opts.crop.originX)),
@@ -105,9 +105,19 @@ async function renderImage(
 
 async function renderAndSave(
   source: string,
-  opts: { crop?: CropRect; maxWidth?: number; compress: number; base64?: boolean }
+  opts: {
+    rotation?: Rotation;
+    crop?: PixelRect | null;
+    maxWidth?: number;
+    compress: number;
+    base64?: boolean;
+  }
 ) {
-  const ref = await renderImage(source, { crop: opts.crop, maxWidth: opts.maxWidth });
+  const ref = await renderImage(source, {
+    rotation: opts.rotation,
+    crop: opts.crop,
+    maxWidth: opts.maxWidth,
+  });
   try {
     return await ref.saveAsync({
       compress: opts.compress,
@@ -183,22 +193,34 @@ export async function uriToDataUri(uri: string): Promise<string | null> {
 /**
  * Data URI sized for PDF embedding. Every product image in a catalog goes
  * through this, so it trades a little resolution for a much smaller document.
+ *
+ * `crop` is the rect derived for the grid cell this image will fill, so the
+ * bytes that reach the PDF are already cell-shaped and the stylesheet's
+ * `object-fit: cover` has nothing left to trim. `maxWidth` should be the cell
+ * width in device pixels — a 4-per-row cell is under 300px wide, and sending
+ * 1100px there was most of why dense grids blew the size budget.
  */
 export async function toPdfDataUri(
-  relativeOrAbsolute: string | null | undefined
+  relativeOrAbsolute: string | null | undefined,
+  opts: { rotation?: Rotation; crop?: PixelRect | null; maxWidth?: number } = {}
 ): Promise<string | null> {
   const absolute = resolveImageUri(relativeOrAbsolute);
   if (!absolute) return null;
 
+  const maxWidth = Math.max(1, Math.min(opts.maxWidth ?? PDF_MAX_WIDTH, PDF_MAX_WIDTH));
+
   try {
     const result = await renderAndSave(absolute, {
-      maxWidth: PDF_MAX_WIDTH,
+      rotation: opts.rotation,
+      crop: opts.crop ?? undefined,
+      maxWidth,
       compress: PDF_QUALITY,
       base64: true,
     });
     if (result.base64) return `data:image/jpeg;base64,${result.base64}`;
   } catch {
-    // fall through
+    // A crop that the manipulator rejects must not lose the image entirely —
+    // the uncropped frame still prints, just centre-cropped by the cell.
   }
 
   return uriToDataUri(absolute);
@@ -243,27 +265,30 @@ async function persist(
   return { relativePath, width: produced.width, height: produced.height };
 }
 
-/** Compress a picked image and store it in the app's product image folder. */
-export async function saveProductImage(sourceUri: string): Promise<SavedImage> {
+/**
+ * Compress a picked image and store it in the app's product image folder.
+ *
+ * This is the master: the full frame, never cropped. Cropping is a rect stored
+ * alongside the product and applied when rendering, so re-framing a shot for a
+ * different grid always starts from these pixels rather than from the last
+ * crop's leftovers.
+ */
+export async function saveProductImage(
+  sourceUri: string,
+  opts: { alreadyNormalized?: { width: number; height: number } } = {}
+): Promise<SavedImage> {
+  // Import already re-encodes to bake in EXIF orientation. Doing it again here
+  // would put a second round of JPEG loss on every photo for no benefit, so a
+  // known-normalised file is just moved into place.
+  if (opts.alreadyNormalized) {
+    return persist({ uri: sourceUri, ...opts.alreadyNormalized }, '');
+  }
+
   const produced = await renderAndSave(sourceUri, {
     maxWidth: STORED_MAX_WIDTH,
     compress: STORED_QUALITY,
   });
   return persist(produced, '');
-}
-
-/** Crop an existing product image and store the result as a new file. */
-export async function cropProductImage(
-  sourceUri: string,
-  crop: CropRect
-): Promise<SavedImage> {
-  const absolute = resolveImageUri(sourceUri) ?? sourceUri;
-  const produced = await renderAndSave(absolute, {
-    crop,
-    maxWidth: STORED_MAX_WIDTH,
-    compress: 0.88,
-  });
-  return persist(produced, 'crop-');
 }
 
 /** Pixel size of an image, used by the crop editor's transform maths. */
@@ -275,6 +300,144 @@ export async function getImageSize(uri: string): Promise<{ width: number; height
     return { width: ref.width, height: ref.height };
   } finally {
     ref.release();
+  }
+}
+
+/**
+ * Re-encode a freshly picked image so its pixels stand on their own.
+ *
+ * Camera files carry an EXIF orientation flag: `<Image>` honours it, but the
+ * manipulator reports the raw buffer's dimensions. On a portrait phone photo
+ * those disagree by a quarter turn, so the crop editor would draw its frame
+ * against a picture rotated from the one on screen and save the wrong region.
+ * Rendering once up front bakes the orientation in and makes the two agree.
+ */
+export async function normalizeImportedImage(
+  sourceUri: string
+): Promise<{ uri: string; width: number; height: number }> {
+  const produced = await renderAndSave(sourceUri, {
+    maxWidth: STORED_MAX_WIDTH,
+    compress: STORED_QUALITY,
+  });
+  return { uri: produced.uri, width: produced.width, height: produced.height };
+}
+
+/**
+ * A copy of the image turned to `rotation`, for the crop editor to work on.
+ *
+ * The editor needs to *show* the rotation while still drawing its frame in
+ * plain upright coordinates. Rendering a temporary rotated copy gives it both;
+ * the stored product keeps the original file and the angle as data.
+ */
+export async function renderRotatedCopy(
+  sourceUri: string,
+  rotation: Rotation
+): Promise<{ uri: string; width: number; height: number }> {
+  const absolute = resolveImageUri(sourceUri) ?? sourceUri;
+  if (!rotation) {
+    const size = await getImageSize(absolute);
+    return { uri: absolute, ...size };
+  }
+  const produced = await renderAndSave(absolute, {
+    rotation,
+    maxWidth: STORED_MAX_WIDTH,
+    compress: STORED_QUALITY,
+  });
+  return { uri: produced.uri, width: produced.width, height: produced.height };
+}
+
+/**
+ * Tiny data URI for the auto-trim scan. A bounding box needs shape, not
+ * detail, and keeping it small keeps the whole scan under a frame or two.
+ */
+export async function toProbeDataUri(
+  uri: string,
+  opts: { rotation?: Rotation; maxEdge: number }
+): Promise<string | null> {
+  const absolute = resolveImageUri(uri) ?? uri;
+  try {
+    const result = await renderAndSave(absolute, {
+      rotation: opts.rotation,
+      maxWidth: opts.maxEdge,
+      compress: 0.8,
+      base64: true,
+    });
+    return result.base64 ? `data:image/jpeg;base64,${result.base64}` : null;
+  } catch {
+    return null;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Storage accounting                                                          */
+/* -------------------------------------------------------------------------- */
+
+/** Absolute path of the folder holding product images, or null on web. */
+function productsFolder(): string | null {
+  const root = documentRoot();
+  return root ? `${withTrailingSlash(root)}${PRODUCTS_FOLDER}` : null;
+}
+
+/** Every file currently sitting in the product image folder. */
+export async function listStoredImageFiles(): Promise<string[]> {
+  const folder = productsFolder();
+  if (!folder) return [];
+  try {
+    const info = await FileSystem.getInfoAsync(folder);
+    if (!info.exists) return [];
+    const names = await FileSystem.readDirectoryAsync(folder);
+    return names.map((name) => `${PRODUCTS_FOLDER}/${name}`);
+  } catch {
+    return [];
+  }
+}
+
+/** Total bytes used by the given stored paths. */
+export async function measureImageBytes(relativePaths: string[]): Promise<number> {
+  let total = 0;
+  for (const path of relativePaths) {
+    const absolute = resolveImageUri(path);
+    if (!absolute || !absolute.startsWith('file://')) continue;
+    try {
+      const info = await FileSystem.getInfoAsync(absolute);
+      if (info.exists && !info.isDirectory) total += info.size ?? 0;
+    } catch {
+      // An unreadable file simply does not count towards the total.
+    }
+  }
+  return total;
+}
+
+/** Bytes held by generated PDFs, which are only ever a cache. */
+export async function measureExportBytes(): Promise<{ bytes: number; folder: string | null }> {
+  const root = documentRoot();
+  if (!root) return { bytes: 0, folder: null };
+  const folder = `${withTrailingSlash(root)}exports`;
+  try {
+    const info = await FileSystem.getInfoAsync(folder);
+    if (!info.exists) return { bytes: 0, folder };
+    const names = await FileSystem.readDirectoryAsync(folder);
+    let total = 0;
+    for (const name of names) {
+      const file = await FileSystem.getInfoAsync(`${folder}/${name}`);
+      if (file.exists && !file.isDirectory) total += file.size ?? 0;
+    }
+    return { bytes: total, folder };
+  } catch {
+    return { bytes: 0, folder };
+  }
+}
+
+export async function deleteFolderContents(folder: string): Promise<void> {
+  try {
+    const info = await FileSystem.getInfoAsync(folder);
+    if (!info.exists) return;
+    const names = await FileSystem.readDirectoryAsync(folder);
+    for (const name of names) {
+      await FileSystem.deleteAsync(`${folder}/${name}`, { idempotent: true });
+    }
+  } catch {
+    // Reclaiming cache is best effort — never fail the screen over it.
   }
 }
 

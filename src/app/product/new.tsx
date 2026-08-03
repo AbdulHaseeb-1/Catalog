@@ -19,9 +19,9 @@ export default function NewProductScreen() {
       initialCompanyId={param(params.companyId)}
       initialFormulaId={param(params.formulaId)}
       submitLabel="Add product"
-      onSubmit={async ({ companyId, formulaId, sourceUri }) => {
+      onSubmit={async ({ companyId, formulaId, sourceUri, crop, rotation, sourceSize }) => {
         if (!sourceUri) throw new Error('Add a photo of the pack.');
-        await addProduct({ companyId, formulaId, sourceUri });
+        await addProduct({ companyId, formulaId, sourceUri, crop, rotation, sourceSize });
         router.back();
       }}
     />

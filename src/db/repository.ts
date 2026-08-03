@@ -10,6 +10,7 @@ export {
   getCompany,
   getCompanyListItem,
   listCompanies,
+  mergeCompanies,
   updateCompany,
 } from './companies';
 
@@ -21,18 +22,25 @@ export {
   getFormula,
   getFormulaListItem,
   listFormulas,
+  mergeFormulas,
   renameFormula,
 } from './formulas';
 
 export {
+  applyFraming,
+  countDeletedProducts,
   countProducts,
   countProductsForPair,
   createProduct,
   deleteProduct,
   deleteProducts,
   getProduct,
+  listAllProductRows,
   listProducts,
+  listReferencedImagePaths,
+  purgeDeletedProducts,
   reorderProducts,
+  restoreProducts,
   updateProduct,
   type ProductOrder,
 } from './products';

@@ -29,7 +29,8 @@
       },
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.READ_MEDIA_IMAGES"
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.RECORD_AUDIO"
       ],
       "predictiveBackGestureEnabled": false,
       "package": "com.eaglepharma.catalogstudio",
@@ -38,7 +39,7 @@
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.WRITE_EXTERNAL_STORAGE"
       ],
-      "versionCode": 1
+      "versionCode": 4
     },
     "web": {
       "output": "static",
@@ -74,6 +75,17 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {
+        "headers": {
+          "Cross-Origin-Embedder-Policy": "credentialless",
+          "Cross-Origin-Opener-Policy": "same-origin"
+        }
+      },
+      "eas": {
+        "projectId": "d73a256f-2ae9-44c3-9ed9-5ff0381e4c61"
+      }
     }
   }
 }

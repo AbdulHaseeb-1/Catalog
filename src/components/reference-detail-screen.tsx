@@ -1,7 +1,8 @@
 import { useNavigation, useRouter } from 'expo-router';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Alert, FlatList, StyleSheet, View, useWindowDimensions } from 'react-native';
 
+import { PickerSheet } from '@/components/picker-sheet';
 import { ProductTile } from '@/components/product-tile';
 import { ThemedText } from '@/components/themed-text';
 import { Button } from '@/components/ui/button';
@@ -10,6 +11,7 @@ import { Screen } from '@/constants/layout';
 import { Radii, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { confirmAction } from '@/lib/confirm';
+import { reportError, toMessage } from '@/lib/errors';
 import { pluralize } from '@/lib/text';
 import { useLibraryStore } from '@/stores/library-store';
 
@@ -26,6 +28,10 @@ export function ReferenceDetailScreen({ kind, id }: { kind: Kind; id: string | u
   const formulas = useLibraryStore((s) => s.formulas);
   const products = useLibraryStore((s) => s.products);
   const removeProduct = useLibraryStore((s) => s.removeProduct);
+  const mergeCompanies = useLibraryStore((s) => s.mergeCompanies);
+  const mergeFormulas = useLibraryStore((s) => s.mergeFormulas);
+
+  const [merging, setMerging] = useState(false);
 
   const entry = useMemo(() => {
     if (!id) return undefined;
@@ -70,6 +76,43 @@ export function ReferenceDetailScreen({ kind, id }: { kind: Kind; id: string | u
     [products, kind, id]
   );
 
+  /**
+   * Everything this record could be folded into. `name_key` only blocks exact
+   * repeats, so "Acme Pharma" and "Acme Pharma Ltd" both survive and split one
+   * range across two sections of the catalogue.
+   */
+  const mergeCandidates = useMemo(() => {
+    const source = kind === 'company' ? companies : formulas;
+    return source
+      .filter((entry) => entry.id !== id)
+      .map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        meta: pluralize(entry.productCount, 'product'),
+      }));
+  }, [kind, id, companies, formulas]);
+
+  const runMerge = async (intoId: string) => {
+    if (!id) return;
+    const target = mergeCandidates.find((c) => c.id === intoId);
+    const ok = await confirmAction(
+      `Merge into “${target?.name ?? 'that record'}”?`,
+      `${pluralize(items.length, 'product')} moves across and “${entry?.name}” is removed. No photos are deleted.`
+    );
+    if (!ok) return;
+
+    setMerging(false);
+    try {
+      if (kind === 'company') await mergeCompanies(id, intoId);
+      else await mergeFormulas(id, intoId);
+      // This record no longer exists, so the screen showing it must not stay.
+      router.back();
+    } catch (e) {
+      reportError('library', e);
+      Alert.alert('Could not merge', toMessage(e));
+    }
+  };
+
   useEffect(() => {
     if (entry) navigation.setOptions({ title: entry.name });
   }, [navigation, entry]);
@@ -106,7 +149,8 @@ export function ReferenceDetailScreen({ kind, id }: { kind: Kind; id: string | u
             try {
               await removeProduct(productId);
             } catch (e) {
-              Alert.alert('Could not delete', e instanceof Error ? e.message : 'Unknown error');
+              reportError('library', e);
+              Alert.alert('Could not delete', toMessage(e));
             }
           }
         },
@@ -165,10 +209,33 @@ export function ReferenceDetailScreen({ kind, id }: { kind: Kind; id: string | u
           onPress={() => router.push(`/library/company/${id}/reorder`)}
         />
       ) : null}
+
+      {mergeCandidates.length ? (
+        <Button
+          title={`Merge into another ${kind}`}
+          variant="ghost"
+          onPress={() => setMerging(true)}
+        />
+      ) : null}
     </View>
   );
 
+  const mergeSheet = (
+    <PickerSheet
+      visible={merging}
+      onClose={() => setMerging(false)}
+      title={`Merge “${entry.name}” into…`}
+      subtitle={`Its ${pluralize(items.length, 'product')} move across and this ${kind} is removed.`}
+      options={mergeCandidates}
+      onSelect={runMerge}
+      noun={kind}
+      nounPlural={kind === 'company' ? 'companies' : 'formulas'}
+      emptyHint={`No other ${kind === 'company' ? 'companies' : 'formulas'} to merge into.`}
+    />
+  );
+
   return (
+    <>
     <FlatList
       style={{ flex: 1, backgroundColor: theme.background }}
       data={items}
@@ -210,6 +277,8 @@ export function ReferenceDetailScreen({ kind, id }: { kind: Kind; id: string | u
         </View>
       )}
     />
+      {mergeSheet}
+    </>
   );
 }
 

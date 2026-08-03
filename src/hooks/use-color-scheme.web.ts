@@ -1,21 +1,24 @@
 import { useEffect, useState } from 'react';
 import { useColorScheme as useRNColorScheme } from 'react-native';
 
+export type ResolvedColorScheme = 'light' | 'dark';
+
 /**
- * To support static rendering, this value needs to be re-calculated on the client side for web
+ * Web build of the hook. The scheme is only trustworthy after hydration, so
+ * static rendering gets 'light' and the client corrects it on mount.
+ *
+ * Like the native version this always resolves to a concrete scheme — see
+ * use-color-scheme.ts for why returning null is not survivable.
  */
-export function useColorScheme() {
+export function useColorScheme(): ResolvedColorScheme {
   const [hasHydrated, setHasHydrated] = useState(false);
 
   useEffect(() => {
     setHasHydrated(true);
   }, []);
 
-  const colorScheme = useRNColorScheme();
+  const scheme = useRNColorScheme() as 'light' | 'dark' | 'unspecified' | null | undefined;
 
-  if (hasHydrated) {
-    return colorScheme;
-  }
-
-  return 'light';
+  if (!hasHydrated) return 'light';
+  return scheme === 'dark' ? 'dark' : 'light';
 }

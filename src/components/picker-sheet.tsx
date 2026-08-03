@@ -5,6 +5,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Sheet } from '@/components/ui/sheet';
 import { Radii, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { reportError, toMessage } from '@/lib/errors';
 import { matchesQuery, normalizeKey, tidyName } from '@/lib/text';
 
 export type PickerOption = {
@@ -78,7 +79,8 @@ export function PickerSheet({
       const created = await onCreate(typed);
       select(created.id);
     } catch (e) {
-      setError(e instanceof Error ? e.message : `Could not add that ${noun}.`);
+      reportError('library', e);
+      setError(toMessage(e, `Could not add that ${noun}.`));
     } finally {
       setCreating(false);
     }

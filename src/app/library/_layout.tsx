@@ -1,6 +1,11 @@
-import { Stack } from 'expo-router';
+import { Stack, type ErrorBoundaryProps } from 'expo-router';
 
+import { RouteErrorBoundary } from '@/components/route-error-boundary';
 import { useTheme } from '@/hooks/use-theme';
+
+export function ErrorBoundary(props: ErrorBoundaryProps) {
+  return <RouteErrorBoundary {...props} where="library stack" />;
+}
 
 export default function LibraryLayout() {
   const theme = useTheme();

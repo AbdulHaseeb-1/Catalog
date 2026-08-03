@@ -17,6 +17,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Screen } from '@/constants/layout';
 import { Radii, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { reportError, toMessage } from '@/lib/errors';
 import { resolveImageUri } from '@/services/image-service';
 import { useLibraryStore } from '@/stores/library-store';
 import type { ProductWithRefs } from '@/types/models';
@@ -80,9 +81,9 @@ function Row({ product, positions, count, onDrop, setDragging }: RowProps) {
     .onUpdate((e) => {
       offset.value = start.value + e.translationY;
 
-      const slot = clamp(Math.round(offset.value / ROW_HEIGHT), 0, count - 1);
+      const slot = clamp(Math.round(offset.value / ROW_HEIGHT), 0, Math.max(0, count - 1));
       const current = positions.value[product.id];
-      if (slot === current) return;
+      if (current === undefined || slot === current) return;
 
       // Swap with whoever holds the slot we moved into.
       const next: Positions = { ...positions.value };
@@ -97,9 +98,15 @@ function Row({ product, positions, count, onDrop, setDragging }: RowProps) {
     })
     .onEnd(() => {
       active.value = false;
-      offset.value = withSpring(positions.value[product.id] * ROW_HEIGHT, SPRING);
+      // The slot can be gone if the list was re-keyed mid-drag (a product
+      // deleted on another screen). `undefined * ROW_HEIGHT` is NaN, and
+      // withSpring(NaN) crashes Reanimated on the UI thread with no JS error.
+      const slot = positions.value[product.id];
+      offset.value = withSpring((slot ?? 0) * ROW_HEIGHT, SPRING);
       runOnJS(setDragging)(false);
-      runOnJS(onDrop)(idsInOrder(positions.value));
+      if (slot !== undefined) {
+        runOnJS(onDrop)(idsInOrder(positions.value));
+      }
     })
     .onFinalize(() => {
       if (active.value) {
@@ -183,6 +190,7 @@ export default function ReorderProductsScreen() {
   const [items, setItems] = useState(initial);
   const [dragging, setDragging] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const positions = useSharedValue<Positions>(
@@ -203,13 +211,20 @@ export default function ReorderProductsScreen() {
   const onDrop = useCallback(
     (orderedIds: string[]) => {
       if (!companyId) return;
+      setSaveError(null);
       reorder(companyId, orderedIds)
         .then(() => {
           setSaved(true);
           if (savedTimer.current) clearTimeout(savedTimer.current);
           savedTimer.current = setTimeout(() => setSaved(false), 1600);
         })
-        .catch(() => undefined);
+        .catch((e: unknown) => {
+          // Was `.catch(() => undefined)` — a failed save left the footer
+          // saying "Changes save as you drop" and the order silently lost.
+          reportError('library', e);
+          setSaved(false);
+          setSaveError(toMessage(e, 'That order could not be saved.'));
+        });
     },
     [companyId, reorder]
   );
@@ -269,8 +284,13 @@ export default function ReorderProductsScreen() {
           },
         ]}>
         <ThemedText
-          style={[styles.statusText, { color: saved ? theme.success : theme.textSecondary }]}>
-          {saved ? '✓ Order saved' : 'Changes save as you drop'}
+          style={[
+            styles.statusText,
+            {
+              color: saveError ? theme.danger : saved ? theme.success : theme.textSecondary,
+            },
+          ]}>
+          {saveError ?? (saved ? '✓ Order saved' : 'Changes save as you drop')}
         </ThemedText>
       </View>
     </View>
