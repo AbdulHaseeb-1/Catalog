@@ -5,8 +5,10 @@ import { Platform } from 'react-native';
 
 import { effectiveCrop } from '@/lib/crop-geometry';
 import { reportError, toMessage } from '@/lib/errors';
+import { slugify } from '@/lib/text';
 import { renderCatalogHtml } from '@/templates';
 import {
+  cropForLayout,
   gridCellSize,
   hasContactDetails,
   pageDimensions,
@@ -15,6 +17,7 @@ import {
   type CatalogDocument,
   type CatalogScope,
   type ExportSettings,
+  type LayoutId,
   type Product,
 } from '@/types/models';
 
@@ -26,25 +29,36 @@ import { toPdfDataUri } from './image-service';
  * enormous HTML string. Handing 40 MB+ of markup to the print engine or the
  * preview WebView reliably kills the native process — an app that vanishes
  * with nothing in the JS logs. These caps turn that into a readable error.
- *
- * The preview is the tighter of the two: it is a convenience, and the export
- * itself should still be attemptable when the preview is too heavy.
  */
 const MAX_PREVIEW_BYTES = 24 * 1024 * 1024;
 const MAX_EXPORT_BYTES = 48 * 1024 * 1024;
+
+/** Permanent on-device folder under the app documents directory. */
+export const CATALOGS_FOLDER = 'Catalogs';
+/** Legacy temp folder — still cleaned by “Free up space”, not used for new PDFs. */
+export const LEGACY_EXPORTS_FOLDER = 'exports';
 
 function megabytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
 }
 
-/** Fail loudly, and with advice, before the native side runs out of memory. */
+function withSlash(root: string): string {
+  return root.endsWith('/') ? root : `${root}/`;
+}
+
+/** Absolute path to Documents/Catalogs (or null on web). */
+export function catalogsDirectory(): string | null {
+  const root = FileSystem.documentDirectory;
+  if (!root) return null;
+  return `${withSlash(root)}${CATALOGS_FOLDER}`;
+}
+
 function assertWithinBudget(html: string, limit: number, what: 'preview' | 'export'): void {
-  // Base64 is ASCII, so one character is one byte — close enough to measure by.
   const size = html.length;
   if (size <= limit) return;
 
   const advice =
-    'Choose a denser layout (3 or 4 per row), switch to a single company or formula, or turn off the cover and label pages.';
+    'Switch to 2 × 3 for denser pages, export a single company or formula, or turn off the cover and label pages.';
   throw new Error(
     what === 'preview'
       ? `This catalogue is too large to preview (${megabytes(size)}). ${advice}`
@@ -53,11 +67,18 @@ function assertWithinBudget(html: string, limit: number, what: 'preview' | 'expo
 }
 
 export type GenerateResult = {
+  /** Absolute file URI of the PDF under the app Documents/Catalogs folder. */
   uri: string;
+  /** Display path (folder + filename) for the success message. */
+  savedAs?: string;
+  /** Size on disk, when known. */
+  bytes?: number;
   /** Web has no file to share — the browser print dialog was opened instead. */
   webPrint?: boolean;
   numberOfPages?: number;
   document: CatalogDocument;
+  /** Images that could not be embedded (page still prints empty cells). */
+  failedImages?: number;
 };
 
 /**
@@ -66,7 +87,6 @@ export type GenerateResult = {
  */
 const CELL_PIXEL_DENSITY = 2.5;
 
-/** Cell geometry the images have to be rendered for. */
 function targetCell(settings: ExportSettings, contact: BrandContact) {
   const cell = gridCellSize({
     layoutId: settings.layoutId,
@@ -75,39 +95,22 @@ function targetCell(settings: ExportSettings, contact: BrandContact) {
   });
   return {
     aspect: cell.width / cell.height,
-    maxWidth: Math.ceil(cell.width * CELL_PIXEL_DENSITY),
+    // Integer pixel budget — the manipulator and print engine both prefer ints.
+    maxWidth: Math.max(
+      1,
+      Math.ceil(Math.max(cell.width, cell.height) * CELL_PIXEL_DENSITY)
+    ),
   };
 }
 
-/**
- * Inline every product image as a base64 data URI. Required on iOS (WKWebView
- * refuses `file://` sources) and far more reliable on Android.
- *
- * Each image is cropped to this layout's cell before being encoded, so the
- * catalogue carries only the pixels it prints. The key includes the crop
- * because two products can share a path but not a framing.
- */
-/**
- * How many images are encoded at once. Native image work is off the JS thread,
- * so a small pool is a large speed-up; going wider mostly buys peak memory,
- * which is the one thing that reliably kills the export.
- */
 const ENCODE_CONCURRENCY = 4;
 
-/**
- * Encoded images, surviving between exports.
- *
- * The bytes are fully determined by the image, its framing and the cell it is
- * being rendered into, so re-exporting an unchanged catalogue can skip the
- * work entirely. Bounded because the entries are whole base64 images.
- */
 const encodeCache = new Map<string, string>();
 const ENCODE_CACHE_LIMIT = 400;
 
 function cacheGet(key: string): string | undefined {
   const hit = encodeCache.get(key);
   if (hit === undefined) return undefined;
-  // Re-insert so the most recently used entries survive the trim.
   encodeCache.delete(key);
   encodeCache.set(key, hit);
   return hit;
@@ -129,17 +132,17 @@ export function invalidateEncodedImages(): void {
 
 async function embedImages(
   doc: CatalogDocument,
-  cell: { aspect: number; maxWidth: number }
-): Promise<Map<string, string>> {
+  cell: { aspect: number; maxWidth: number },
+  layoutId: LayoutId | string
+): Promise<{ map: Map<string, string>; failed: number }> {
   const resolved = new Map<string, string>();
   let failed = 0;
 
-  // Deduplicate first: the same product can appear under several sections.
   const pending = new Map<string, Product>();
   let fromCache = 0;
   for (const section of doc.sections) {
     for (const product of section.products) {
-      const key = imageKey(product, cell);
+      const key = imageKey(product, cell, layoutId);
       if (!key || resolved.has(key) || pending.has(key)) continue;
       const cached = cacheGet(key);
       if (cached) {
@@ -159,22 +162,27 @@ async function embedImages(
       const index = cursor++;
       const [key, product] = jobs[index];
 
-      // The stored dimensions are of the upright master; the crop was drawn
-      // against the rotated frame, so it has to be resolved in that space.
       const crop = effectiveCrop(
-        product.crop,
+        cropForLayout(product, layoutId),
         product.width && product.height
           ? rotatedSize({ width: product.width, height: product.height }, product.rotation)
-          : null,
-        cell.aspect
+          : null
       );
 
-      try {
-        const dataUri = await toPdfDataUri(product.imageUri, {
+      const encodeOnce = () =>
+        toPdfDataUri(product.imageUri, {
           rotation: product.rotation,
           crop,
           maxWidth: cell.maxWidth,
         });
+
+      try {
+        let dataUri = await encodeOnce();
+        // One silent retry — manipulators occasionally flake under load.
+        if (!dataUri?.startsWith('data:')) {
+          await new Promise((r) => setTimeout(r, 80));
+          dataUri = await encodeOnce();
+        }
         if (dataUri?.startsWith('data:')) {
           resolved.set(key, dataUri);
           cachePut(key, dataUri);
@@ -183,14 +191,26 @@ async function embedImages(
           console.warn('[pdf] Could not embed image for product', product.id);
         }
       } catch (e) {
-        failed += 1;
-        reportError('pdf', e);
+        try {
+          await new Promise((r) => setTimeout(r, 80));
+          const dataUri = await encodeOnce();
+          if (dataUri?.startsWith('data:')) {
+            resolved.set(key, dataUri);
+            cachePut(key, dataUri);
+          } else {
+            failed += 1;
+            reportError('pdf', e);
+          }
+        } catch (e2) {
+          failed += 1;
+          reportError('pdf', e2);
+        }
       }
     }
   };
 
   await Promise.all(
-    Array.from({ length: Math.min(ENCODE_CONCURRENCY, jobs.length) }, worker)
+    Array.from({ length: Math.min(ENCODE_CONCURRENCY, Math.max(1, jobs.length)) }, worker)
   );
 
   if (resolved.size === 0 && doc.productCount > 0) {
@@ -206,22 +226,22 @@ async function embedImages(
     );
   }
 
-  return resolved;
+  return { map: resolved, failed };
 }
 
-/**
- * Identity of the rendered bytes. Everything that changes a pixel goes in:
- * the path, the framing, the angle, and the cell being filled — which is why
- * the same key is safe to reuse as a cache key across exports.
- */
-function imageKey(product: Product, cell: { aspect: number; maxWidth: number }): string | null {
+function imageKey(
+  product: Product,
+  cell: { aspect: number; maxWidth: number },
+  layoutId: LayoutId | string
+): string | null {
   if (!product.imageUri) return null;
-  const c = product.crop;
+  const c = cropForLayout(product, layoutId);
   const frame = c
     ? `${c.x.toFixed(4)},${c.y.toFixed(4)},${c.w.toFixed(4)},${c.h.toFixed(4)}`
     : 'full';
   return [
     product.imageUri,
+    layoutId,
     frame,
     product.rotation,
     cell.aspect.toFixed(4),
@@ -234,18 +254,21 @@ async function buildHtml(
   doc: CatalogDocument,
   settings: ExportSettings,
   contact: BrandContact
-): Promise<string> {
-  const { width, height } = pageDimensions(settings);
+): Promise<{ html: string; failedImages: number }> {
+  const dims = pageDimensions(settings);
+  // Integer page size — fractional points confuse native print engines.
+  const width = Math.round(dims.width);
+  const height = Math.round(dims.height);
   const cell = targetCell(settings, contact);
-  const cache = await embedImages(doc, cell);
+  const { map, failed } = await embedImages(doc, cell, settings.layoutId);
 
   const html = renderCatalogHtml({
     document: doc,
     settings,
     contact,
     resolveImage: (product) => {
-      const key = imageKey(product, cell);
-      return key ? (cache.get(key) ?? null) : null;
+      const key = imageKey(product, cell, settings.layoutId);
+      return key ? (map.get(key) ?? null) : null;
     },
     pageWidth: width,
     pageHeight: height,
@@ -254,11 +277,11 @@ async function buildHtml(
   if (__DEV__) {
     console.log(
       `[pdf] ${doc.sections.length} section(s), ${doc.productCount} product(s), ` +
-        `${cache.size} image(s), ${html.length} chars, page ${width}×${height}`
+        `${map.size} image(s), ${html.length} chars, page ${width}×${height}`
     );
   }
 
-  return html;
+  return { html, failedImages: failed };
 }
 
 function assertPrintable(doc: CatalogDocument): void {
@@ -267,7 +290,6 @@ function assertPrintable(doc: CatalogDocument): void {
   }
 }
 
-/** Exact page count, read back from the markup the renderer produced. */
 function countPages(html: string): number {
   return (html.match(/class="page"/g) ?? []).length;
 }
@@ -278,14 +300,14 @@ export async function buildPreviewHtml(
   settings: ExportSettings,
   contact: BrandContact
 ): Promise<{ html: string; document: CatalogDocument; pageCount: number }> {
-  const doc = await buildCatalogDocument(scope);
+  let doc = await buildCatalogDocument(scope);
+  doc = applyFramedOnlyFilter(doc, settings);
   assertPrintable(doc);
-  const html = await buildHtml(doc, settings, contact);
+  const { html } = await buildHtml(doc, settings, contact);
   assertWithinBudget(html, MAX_PREVIEW_BYTES, 'preview');
   return { html, document: doc, pageCount: countPages(html) };
 }
 
-/** Open the system print dialog on web (the user picks "Save as PDF"). */
 async function printHtmlOnWeb(html: string): Promise<void> {
   if (typeof window === 'undefined' || typeof document === 'undefined') {
     throw new Error('PDF export is only available in a browser or the native app.');
@@ -308,8 +330,7 @@ async function printHtmlOnWeb(html: string): Promise<void> {
   frameDoc.write(html);
   frameDoc.close();
 
-  // Give the embedded images a moment to decode before printing.
-  await new Promise<void>((resolve) => setTimeout(resolve, 400));
+  await new Promise<void>((resolve) => setTimeout(resolve, 500));
 
   try {
     iframe.contentWindow?.focus();
@@ -325,25 +346,113 @@ async function printHtmlOnWeb(html: string): Promise<void> {
   }
 }
 
-/** Copy the generated file somewhere stable, so sharing later still works. */
-async function moveToExports(sourceUri: string, fileStem: string): Promise<string> {
-  const root = FileSystem.documentDirectory;
-  if (!root) return sourceUri;
+async function ensureCatalogsDir(): Promise<string> {
+  const dir = catalogsDirectory();
+  if (!dir) {
+    throw new Error('On-device document storage is not available on this platform.');
+  }
+  const info = await FileSystem.getInfoAsync(dir);
+  if (!info.exists) {
+    await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+  }
+  return dir;
+}
+
+/**
+ * Move (or copy) the print engine’s temp PDF into Documents/Catalogs with a
+ * stable name. Files here survive app restarts; cache paths do not.
+ */
+async function saveToDocumentsFolder(
+  sourceUri: string,
+  fileStem: string,
+  layoutId: string
+): Promise<{ uri: string; savedAs: string; bytes: number }> {
+  const dir = await ensureCatalogsDir();
+  const day = new Date().toISOString().slice(0, 10);
+  const base = slugify(`${fileStem}-${layoutId}-${day}`, 'catalogue');
+  let filename = `${base}.pdf`;
+  let dest = `${dir}/${filename}`;
+
+  // Keep an earlier export of the same day/layout with a time suffix.
+  const existing = await FileSystem.getInfoAsync(dest);
+  if (existing.exists) {
+    const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '');
+    filename = `${base}-${stamp}.pdf`;
+    dest = `${dir}/${filename}`;
+  }
 
   try {
-    const exportsDir = `${root.endsWith('/') ? root : `${root}/`}exports`;
-    const info = await FileSystem.getInfoAsync(exportsDir);
-    if (!info.exists) {
-      await FileSystem.makeDirectoryAsync(exportsDir, { intermediates: true });
-    }
-    const dest = `${exportsDir}/${fileStem}-${Date.now()}.pdf`;
+    await FileSystem.moveAsync({ from: sourceUri, to: dest });
+  } catch {
+    // Some platforms refuse move from the print cache — copy then delete.
     await FileSystem.copyAsync({ from: sourceUri, to: dest });
-    return dest;
-  } catch (e) {
-    // The cache copy is a nicety — the freshly printed file still works.
-    reportError('pdf', e);
-    return sourceUri;
+    try {
+      await FileSystem.deleteAsync(sourceUri, { idempotent: true });
+    } catch {
+      // temp cleanup is best-effort
+    }
   }
+
+  const info = await FileSystem.getInfoAsync(dest);
+  if (!info.exists) {
+    throw new Error('The PDF could not be saved to the Documents folder.');
+  }
+  const bytes = typeof info.size === 'number' ? info.size : 0;
+  if (bytes > 0 && bytes < 200) {
+    throw new Error('The PDF file looks empty. Try exporting again.');
+  }
+
+  return {
+    uri: dest,
+    savedAs: `${CATALOGS_FOLDER}/${filename}`,
+    bytes,
+  };
+}
+
+async function printToTempFile(
+  html: string,
+  width: number,
+  height: number
+): Promise<{ uri: string; numberOfPages?: number }> {
+  const options: Print.FilePrintOptions = {
+    html,
+    width,
+    height,
+    // iOS honours these; Android uses the HTML @page rules + width/height.
+    margins: { top: 0, right: 0, bottom: 0, left: 0 },
+  };
+
+  try {
+    return await Print.printToFileAsync(options);
+  } catch (first) {
+    // One retry after a short pause — native print can flake under memory pressure.
+    reportError('pdf', first);
+    await new Promise((r) => setTimeout(r, 400));
+    try {
+      return await Print.printToFileAsync(options);
+    } catch (second) {
+      reportError('pdf', second);
+      throw new Error(
+        `PDF engine failed: ${toMessage(second)}. Try 2 × 3 for denser pages, or a narrower selection.`
+      );
+    }
+  }
+}
+
+/** Drop products that have no crop for the active layout when framedOnly is on. */
+function applyFramedOnlyFilter(
+  doc: CatalogDocument,
+  settings: ExportSettings
+): CatalogDocument {
+  if (!settings.framedOnly) return doc;
+  const sections = doc.sections
+    .map((section) => ({
+      ...section,
+      products: section.products.filter((p) => cropForLayout(p, settings.layoutId) != null),
+    }))
+    .filter((section) => section.products.length > 0);
+  const productCount = sections.reduce((n, s) => n + s.products.length, 0);
+  return { ...doc, sections, productCount };
 }
 
 export async function generatePdf(
@@ -351,42 +460,58 @@ export async function generatePdf(
   settings: ExportSettings,
   contact: BrandContact
 ): Promise<GenerateResult> {
-  const doc = await buildCatalogDocument(scope);
+  let doc = await buildCatalogDocument(scope);
+  doc = applyFramedOnlyFilter(doc, settings);
   assertPrintable(doc);
 
-  const html = await buildHtml(doc, settings, contact);
+  const { html, failedImages } = await buildHtml(doc, settings, contact);
   assertWithinBudget(html, MAX_EXPORT_BYTES, 'export');
-  const { width, height } = pageDimensions(settings);
+  const expectedPages = countPages(html);
+
+  const dims = pageDimensions(settings);
+  const width = Math.round(dims.width);
+  const height = Math.round(dims.height);
 
   if (Platform.OS === 'web') {
     await printHtmlOnWeb(html);
-    return { uri: '', webPrint: true, document: doc };
+    return { uri: '', webPrint: true, document: doc, failedImages, numberOfPages: expectedPages };
   }
 
-  let result: { uri: string; numberOfPages?: number };
-  try {
-    result = await Print.printToFileAsync({
-      html,
-      width,
-      height,
-      // Zero margins — the image grid runs edge to edge.
-      margins: { top: 0, right: 0, bottom: 0, left: 0 },
-    });
-  } catch (e) {
-    reportError('pdf', e);
-    throw new Error(
-      `PDF engine failed: ${toMessage(e)}. Try a denser layout (3–4 per row) or a narrower selection.`
-    );
-  }
+  const result = await printToTempFile(html, width, height);
 
   if (!result?.uri) {
     throw new Error('The PDF was generated but no file path came back.');
   }
 
+  try {
+    const tempInfo = await FileSystem.getInfoAsync(result.uri);
+    if (!tempInfo.exists) {
+      throw new Error('The print engine did not create a file.');
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message.includes('did not create')) throw e;
+    reportError('pdf', e);
+  }
+
+  const saved = await saveToDocumentsFolder(result.uri, doc.fileStem, settings.layoutId);
+  const printedPages = result.numberOfPages ?? expectedPages;
+  if (
+    result.numberOfPages != null &&
+    expectedPages > 0 &&
+    Math.abs(result.numberOfPages - expectedPages) > 1
+  ) {
+    console.warn(
+      `[pdf] page count mismatch: html ${expectedPages}, engine ${result.numberOfPages}`
+    );
+  }
+
   return {
-    uri: await moveToExports(result.uri, doc.fileStem),
-    numberOfPages: result.numberOfPages,
+    uri: saved.uri,
+    savedAs: saved.savedAs,
+    bytes: saved.bytes,
+    numberOfPages: printedPages,
     document: doc,
+    failedImages: failedImages || undefined,
   };
 }
 
@@ -406,7 +531,6 @@ export async function sharePdf(uri: string): Promise<void> {
     }
   } catch (e) {
     if (e instanceof Error && e.message.includes('missing')) throw e;
-    // getInfoAsync can throw on some URI schemes — still worth trying to share.
     reportError('pdf', e);
   }
 

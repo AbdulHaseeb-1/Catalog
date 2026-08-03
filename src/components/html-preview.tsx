@@ -63,7 +63,7 @@ export function HtmlPreview({ html, pageWidth }: Props) {
           new Error(`WebView render process gone (didCrash=${String(didCrash)})`)
         );
         setFailure(
-          'The preview ran out of memory rendering this catalogue. Try a denser layout (3 or 4 per row) or a narrower selection.'
+          'The preview ran out of memory rendering this catalogue. Try 2 × 3 for denser pages, or a narrower selection.'
         );
         return true;
       }}
@@ -71,7 +71,7 @@ export function HtmlPreview({ html, pageWidth }: Props) {
       onContentProcessDidTerminate={() => {
         reportError('preview', new Error('WebView content process terminated'));
         setFailure(
-          'The preview ran out of memory rendering this catalogue. Try a denser layout (3 or 4 per row) or a narrower selection.'
+          'The preview ran out of memory rendering this catalogue. Try 2 × 3 for denser pages, or a narrower selection.'
         );
       }}
       onError={(event) => {

@@ -11,10 +11,24 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Screen, TabBar } from '@/constants/layout';
 import { Elevation, Radii, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import {
+  assessExportReadiness,
+  type ReadinessHref,
+  type ReadinessIssue,
+} from '@/lib/export-readiness';
 import { runSafely } from '@/lib/errors';
 import { pluralize } from '@/lib/text';
 import { useLibraryStore } from '@/stores/library-store';
-import { hasContactDetails, LAYOUTS, type ExportSettings, type PageSize } from '@/types/models';
+import {
+  LAYOUTS,
+  cropForLayout,
+  hasContactDetails,
+  layoutMeta,
+  type ExportSettings,
+  type LayoutId,
+  type PageSize,
+  type ProductWithRefs,
+} from '@/types/models';
 
 type SheetMode = 'company' | 'formula' | null;
 
@@ -78,6 +92,26 @@ export default function GenerateScreen() {
   };
 
   const hasProducts = products.length > 0;
+
+  const readiness = useMemo(
+    () => assessExportReadiness(products, settings, contact),
+    [products, settings, contact]
+  );
+
+  const openReadinessHref = useCallback(
+    (href: ReadinessHref) => {
+      if (href.kind === 'settings') {
+        router.push('/(tabs)/settings');
+        return;
+      }
+      if (href.kind === 'product') {
+        router.push(`/product/${href.productId}`);
+        return;
+      }
+      router.push('/(tabs)');
+    },
+    [router]
+  );
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: theme.background }]} edges={['top']}>
@@ -161,13 +195,46 @@ export default function GenerateScreen() {
                     key={layout.id}
                     label={layout.name}
                     selected={settings.layoutId === layout.id}
-                    onPress={() => applySetting({ layoutId: layout.id })}
+                    onPress={() => applySetting({ layoutId: layout.id as LayoutId })}
                   />
                 ))}
               </View>
               <ThemedText themeColor="textSecondary" style={styles.hint}>
-                {LAYOUTS.find((l) => l.id === settings.layoutId)?.description}
+                {layoutMeta(settings.layoutId).description} Each product keeps a crop for this
+                grid — export uses the matching framing.
               </ThemedText>
+              <FramingStatus products={products} layoutId={settings.layoutId} />
+              <View style={{ height: Spacing.two }} />
+              <ToggleRow
+                label="Only include framed products"
+                hint="Skip products that have no crop for this layout (full-frame fallbacks are left out)."
+                value={settings.framedOnly}
+                onChange={(framedOnly) => applySetting({ framedOnly })}
+              />
+            </Section>
+
+            <Section title="Before you export">
+              {readiness.issues.length === 0 ? (
+                <ThemedText themeColor="textSecondary" style={styles.hint}>
+                  Ready — {pluralize(readiness.total, 'product')}, {readiness.framed} framed for{' '}
+                  {layoutMeta(settings.layoutId).name}.
+                </ThemedText>
+              ) : (
+                <View style={styles.readinessList}>
+                  <ThemedText themeColor="textSecondary" style={styles.readinessLead}>
+                    Tap an item to fix it.
+                  </ThemedText>
+                  {readiness.issues.map((issue) => (
+                    <ReadinessRow
+                      key={issue.id}
+                      issue={issue}
+                      onPress={
+                        issue.href ? () => openReadinessHref(issue.href!) : undefined
+                      }
+                    />
+                  ))}
+                </View>
+              )}
             </Section>
 
             <Section title="Paper">
@@ -209,7 +276,7 @@ export default function GenerateScreen() {
                 label="Contact box"
                 hint={
                   hasContactDetails(contact)
-                    ? 'Your name, address and phone at the foot of every image page.'
+                    ? 'Your name, address, and CEO / office WhatsApp numbers at the foot of every image page.'
                     : 'Add your details in Settings to switch this on.'
                 }
                 value={settings.includeContactBox && hasContactDetails(contact)}
@@ -250,6 +317,61 @@ export default function GenerateScreen() {
         emptyHint="No formula has products yet."
       />
     </SafeAreaView>
+  );
+}
+
+function FramingStatus({
+  products,
+  layoutId,
+}: {
+  products: ProductWithRefs[];
+  layoutId: LayoutId | string;
+}) {
+  if (!products.length) return null;
+  const framed = products.filter((p) => cropForLayout(p, layoutId) != null).length;
+  const missing = products.length - framed;
+  const name = layoutMeta(layoutId).name;
+  return (
+    <ThemedText themeColor="textSecondary" style={styles.hint}>
+      {missing === 0
+        ? `All ${products.length} products have a ${name} crop.`
+        : `${framed} framed for ${name} · ${missing} will use full frame until cropped.`}
+    </ThemedText>
+  );
+}
+
+function ReadinessRow({
+  issue,
+  onPress,
+}: {
+  issue: ReadinessIssue;
+  onPress?: () => void;
+}) {
+  const theme = useTheme();
+  const warn = issue.severity === 'warn';
+  const body = (
+    <ThemedText
+      style={[styles.readinessItem, warn ? { color: theme.danger } : undefined]}
+      themeColor={warn ? undefined : 'textSecondary'}>
+      {warn ? '⚠ ' : '· '}
+      {issue.message}
+      {onPress ? (
+        <ThemedText style={[styles.readinessLink, { color: theme.primary }]}>
+          {' '}
+          Fix →
+        </ThemedText>
+      ) : null}
+    </ThemedText>
+  );
+  if (!onPress) return body;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Fix: ${issue.message}`}
+      onPress={onPress}
+      style={({ pressed }) => [{ opacity: pressed ? 0.7 : 1 }]}>
+      {body}
+    </Pressable>
   );
 }
 
@@ -357,6 +479,23 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
     gap: Screen.sectionGap,
+  },
+  readinessList: {
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: Spacing.one,
+  },
+  readinessLead: {
+    fontSize: 12,
+    marginBottom: 2,
+  },
+  readinessItem: {
+    fontSize: 12.5,
+    lineHeight: 18,
+  },
+  readinessLink: {
+    fontSize: 12.5,
+    fontWeight: '700',
   },
   section: {
     gap: Spacing.two,

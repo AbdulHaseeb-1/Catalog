@@ -33,11 +33,13 @@ function TabIcon({ name, focused, color }: { name: string; focused: boolean; col
 export default function TabsLayout() {
   const theme = Colors[useColorScheme()];
 
-  const icon =
-    (name: string) =>
-    ({ color, focused }: { color: ColorValue; focused: boolean }) => (
+  const icon = (name: string) => {
+    // Named rather than an inline arrow so the lint rule can see a display name.
+    const TabBarIcon = ({ color, focused }: { color: ColorValue; focused: boolean }) => (
       <TabIcon name={name} focused={focused} color={String(color)} />
     );
+    return TabBarIcon;
+  };
 
   return (
     <Tabs

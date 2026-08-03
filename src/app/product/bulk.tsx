@@ -20,12 +20,21 @@ import { Button } from '@/components/ui/button';
 import { Screen } from '@/constants/layout';
 import { Radii, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import type { NormalizedRect } from '@/lib/crop-geometry';
+import { deriveCoverCrop } from '@/lib/crop-geometry';
 import { reportError, toMessage } from '@/lib/errors';
 import { pluralize } from '@/lib/text';
 import { normalizeImportedImage, pickImages } from '@/services/image-service';
 import { useLibraryStore } from '@/stores/library-store';
-import { hasContactDetails, type Rotation } from '@/types/models';
+import {
+  cellAspectRatio,
+  cropForLayout,
+  hasContactDetails,
+  layoutMeta,
+  rotatedSize,
+  type LayoutCrops,
+  type LayoutId,
+  type Rotation,
+} from '@/types/models';
 
 function param(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -36,7 +45,7 @@ type Draft = {
   uri: string;
   size: { width: number; height: number } | null;
   formulaId: string | null;
-  crop: NormalizedRect | null;
+  crops: LayoutCrops;
   rotation: Rotation;
 };
 
@@ -66,14 +75,22 @@ export default function BulkImportScreen() {
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [picking, setPicking] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
+  /** Layout open in the cropper for the current draft. */
+  const [cropLayout, setCropLayout] = useState<LayoutId>('2x2');
+  const [sessionInitialCrop, setSessionInitialCrop] = useState<
+    import('@/lib/crop-geometry').NormalizedRect | null
+  >(null);
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const contactBox =
+    exportSettings.includeContactBox && hasContactDetails(brandContact);
+
   const pageContext = {
-    layoutId: exportSettings.layoutId,
+    layoutId: cropLayout,
     pageSize: exportSettings.pageSize,
-    contactBox: exportSettings.includeContactBox && hasContactDetails(brandContact),
+    contactBox,
   };
 
   const companyOptions = useMemo(
@@ -113,7 +130,7 @@ export default function BulkImportScreen() {
             uri: normalized.uri,
             size: { width: normalized.width, height: normalized.height },
             formulaId: null,
-            crop: null,
+            crops: {},
             rotation: 0,
           });
         } catch (e) {
@@ -165,10 +182,38 @@ export default function BulkImportScreen() {
   const copyFramingToAll = (source: Draft) => {
     setDrafts((current) =>
       current.map((d) =>
-        d.key === source.key ? d : { ...d, crop: source.crop, rotation: source.rotation }
+        d.key === source.key
+          ? d
+          : { ...d, crops: { ...source.crops }, rotation: source.rotation }
       )
     );
   };
+
+  const previewLayout = exportSettings.layoutId as LayoutId;
+
+  const openBulkCropper = (draft: Draft, layout: LayoutId) => {
+    let initial = cropForLayout({ crops: draft.crops }, layout);
+    if (!initial && draft.size) {
+      const other: LayoutId = layout === '2x2' ? '2x3' : '2x2';
+      const otherCrop = cropForLayout({ crops: draft.crops }, other);
+      if (otherCrop) {
+        initial = deriveCoverCrop(
+          otherCrop,
+          rotatedSize(draft.size, draft.rotation),
+          cellAspectRatio({
+            layoutId: layout,
+            pageSize: exportSettings.pageSize,
+            contactBox,
+          })
+        );
+      }
+    }
+    setSessionInitialCrop(initial);
+    setCropLayout(layout);
+    setEditing(draft.key);
+  };
+
+  const layoutName = layoutMeta(cropLayout).name;
 
   const ready = drafts.filter((d) => d.formulaId);
   const canSave = !!companyId && ready.length > 0 && !saving;
@@ -186,7 +231,7 @@ export default function BulkImportScreen() {
         items: ready.map((d) => ({
           sourceUri: d.uri,
           formulaId: d.formulaId as string,
-          crop: d.crop,
+          crops: d.crops,
           rotation: d.rotation,
           sourceSize: d.size,
         })),
@@ -216,13 +261,14 @@ export default function BulkImportScreen() {
           styles.row,
           { backgroundColor: theme.backgroundElement, borderColor: theme.border },
         ]}>
-        <Pressable onPress={() => setEditing(item.key)} accessibilityRole="button">
+        <Pressable
+          onPress={() => openBulkCropper(item, '2x2')}
+          accessibilityRole="button">
           <CroppedImage
             uri={item.uri}
-            crop={item.crop}
+            crop={cropForLayout({ crops: item.crops }, previewLayout)}
             sourceSize={item.size}
             rotation={item.rotation}
-            aspect={1}
             style={[styles.thumb, { borderColor: theme.border }]}
           />
         </Pressable>
@@ -241,8 +287,15 @@ export default function BulkImportScreen() {
             emptyHint="No formulas yet — type a name to add the first one."
           />
           <View style={styles.rowActions}>
-            <Pressable onPress={() => setEditing(item.key)} hitSlop={6}>
-              <ThemedText style={[styles.rowAction, { color: theme.primary }]}>Crop</ThemedText>
+            <Pressable onPress={() => openBulkCropper(item, '2x2')} hitSlop={6}>
+              <ThemedText style={[styles.rowAction, { color: theme.primary }]}>
+                Crop 2×2
+              </ThemedText>
+            </Pressable>
+            <Pressable onPress={() => openBulkCropper(item, '2x3')} hitSlop={6}>
+              <ThemedText style={[styles.rowAction, { color: theme.primary }]}>
+                Crop 2×3
+              </ThemedText>
             </Pressable>
             <Pressable onPress={() => copyFramingToAll(item)} hitSlop={6}>
               <ThemedText style={[styles.rowAction, { color: theme.primary }]}>
@@ -289,8 +342,8 @@ export default function BulkImportScreen() {
               emptyHint="No companies yet — type a name to add the first one."
             />
             <ThemedText themeColor="textSecondary" style={styles.headerHint}>
-              Chosen once for the whole batch. Crop one shot, then reuse that framing across the
-              rest.
+              Crop 2×2 then 2×3 for each photo — pan, pinch and rotate for the best angle on
+              both grids. Copy framing stamps both onto the rest of the batch.
             </ThemedText>
             <Button
               title={picking ? 'Opening photos…' : 'Add more photos'}
@@ -348,21 +401,56 @@ export default function BulkImportScreen() {
         visible={!!editingDraft}
         animationType="slide"
         presentationStyle="fullScreen"
-        onRequestClose={() => setEditing(null)}>
+        onRequestClose={() => {
+          setEditing(null);
+          setSessionInitialCrop(null);
+        }}>
         <GestureHandlerRootView style={{ flex: 1 }}>
           {editingDraft ? (
             <ImageCropper
+              key={`${editingDraft.key}-${cropLayout}`}
               uri={editingDraft.uri}
-              initialCrop={editingDraft.crop}
+              initialCrop={sessionInitialCrop}
               initialRotation={editingDraft.rotation}
               page={pageContext}
-              title="Crop pack shot"
-              subtitle={formulaName(editingDraft.formulaId) ?? 'Not tagged yet'}
-              confirmLabel="Use this crop"
-              onCancel={() => setEditing(null)}
-              onConfirm={({ crop, sourceSize, rotation }) => {
-                patch(editingDraft.key, { crop, rotation, size: sourceSize });
+              title={`Crop for ${layoutName}`}
+              subtitle={
+                cropLayout === '2x3'
+                  ? '2 × 3 — pan, pinch and rotate for the best angle'
+                  : formulaName(editingDraft.formulaId) ?? 'Not tagged yet'
+              }
+              confirmLabel={
+                cropLayout === '2x2' && !cropForLayout({ crops: editingDraft.crops }, '2x3')
+                  ? 'Next: adjust 2 × 3'
+                  : 'Use this crop'
+              }
+              onCancel={() => {
                 setEditing(null);
+                setSessionInitialCrop(null);
+              }}
+              onConfirm={({ crop, sourceSize, rotation }) => {
+                const nextCrops: LayoutCrops = {
+                  ...editingDraft.crops,
+                  [cropLayout]: crop,
+                };
+                const updated: Draft = {
+                  ...editingDraft,
+                  crops: nextCrops,
+                  rotation,
+                  size: sourceSize,
+                };
+                patch(editingDraft.key, {
+                  crops: nextCrops,
+                  rotation,
+                  size: sourceSize,
+                });
+
+                if (cropLayout === '2x2' && !cropForLayout({ crops: nextCrops }, '2x3')) {
+                  openBulkCropper(updated, '2x3');
+                  return;
+                }
+                setEditing(null);
+                setSessionInitialCrop(null);
               }}
             />
           ) : null}

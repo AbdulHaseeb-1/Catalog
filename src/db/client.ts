@@ -76,6 +76,15 @@ const MIGRATIONS: readonly string[] = [
 
   CREATE INDEX IF NOT EXISTS idx_products_deleted ON products(deleted_at);
   `,
+
+  // v5 — second layout crop (2×3). Existing crop_* columns are the 2×2 frame;
+  // 2×3 starts null until the user frames it (different cell aspect).
+  `
+  ALTER TABLE products ADD COLUMN crop_2x3_x REAL;
+  ALTER TABLE products ADD COLUMN crop_2x3_y REAL;
+  ALTER TABLE products ADD COLUMN crop_2x3_w REAL;
+  ALTER TABLE products ADD COLUMN crop_2x3_h REAL;
+  `,
 ];
 
 let db: SQLite.SQLiteDatabase | null = null;

@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 
 import * as repo from '@/db/repository';
-import type { NormalizedRect } from '@/lib/crop-geometry';
 import { reportError, toMessage, withTimeout } from '@/lib/errors';
 import { cleanupLegacyStorage } from '@/services/legacy-cleanup';
 import { purgeExpiredBin } from '@/services/storage-service';
@@ -19,6 +18,7 @@ import {
   type ExportSettings,
   type Formula,
   type FormulaListItem,
+  type LayoutCrops,
   type Product,
   type ProductWithRefs,
   type Rotation,
@@ -58,8 +58,8 @@ interface LibraryState {
     companyId: string;
     formulaId: string;
     sourceUri: string;
-    /** Framing chosen in the cropper, as fractions of the picked image. */
-    crop?: NormalizedRect | null;
+    /** Framing per layout, as fractions of the picked image. */
+    crops?: LayoutCrops;
     rotation?: Rotation;
     /** Size of an already-normalised import, to skip re-encoding it. */
     sourceSize?: { width: number; height: number } | null;
@@ -73,7 +73,7 @@ interface LibraryState {
     items: {
       sourceUri: string;
       formulaId: string;
-      crop?: NormalizedRect | null;
+      crops?: LayoutCrops;
       rotation?: Rotation;
       /** Size of an already-normalised import, to skip re-encoding it. */
       sourceSize?: { width: number; height: number } | null;
@@ -90,7 +90,7 @@ interface LibraryState {
       companyId?: string;
       formulaId?: string;
       sourceUri?: string;
-      crop?: NormalizedRect | null;
+      crops?: LayoutCrops;
       /**
        * Measured size of the image the crop was drawn on. Backfills rows saved
        * before crops existed, which have no dimensions and so could not
@@ -101,13 +101,15 @@ interface LibraryState {
     }
   ) => Promise<void>;
   /**
-   * Stamp one framing onto many products. Pack shots for a company come off
-   * the same rig, so a rect that suits one usually suits the range.
+   * Stamp framing onto many products. Pack shots for a company come off
+   * the same rig, so rects that suit one usually suit the range.
    */
   applyFramingTo: (
     ids: string[],
-    framing: { crop: NormalizedRect | null; rotation?: Rotation }
+    framing: { crops: LayoutCrops; rotation?: Rotation }
   ) => Promise<number>;
+  /** Clone a product (same photo, framing, company & formula). */
+  duplicateProduct: (id: string) => Promise<Product>;
   /** Soft delete — reversible with `undoRemoveProducts`. */
   removeProduct: (id: string) => Promise<void>;
   undoRemoveProducts: (ids: string[]) => Promise<number>;
@@ -324,7 +326,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 
   /* ----------------------------------------------------------------- products */
 
-  addProduct: async ({ companyId, formulaId, sourceUri, crop, rotation, sourceSize }) => {
+  addProduct: async ({ companyId, formulaId, sourceUri, crops, rotation, sourceSize }) => {
     set({ busy: true, error: null });
     try {
       const image = await saveProductImage(sourceUri, {
@@ -336,9 +338,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         imageUri: image.relativePath,
         width: image.width,
         height: image.height,
-        // The crop is normalised, so it still describes the same region after
+        // Crops are normalised, so they still describe the same regions after
         // saveProductImage has downscaled the picked file.
-        crop: crop ?? null,
+        crops: crops ?? {},
         rotation,
       });
 
@@ -377,7 +379,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
             imageUri: image.relativePath,
             width: image.width,
             height: image.height,
-            crop: item.crop ?? null,
+            crops: item.crops ?? {},
             rotation: item.rotation,
           });
           created.push(product.id);
@@ -425,8 +427,10 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         width,
         height,
         // A new photo invalidates the old framing, so replacing the image
-        // always writes a crop — the new one, or null for the full frame.
-        crop: patch.sourceUri ? (patch.crop ?? null) : patch.crop,
+        // always writes crops — the new ones, or empty for full frame.
+        crops: patch.sourceUri
+          ? (patch.crops ?? { '2x2': null, '2x3': null })
+          : patch.crops,
         rotation: patch.sourceUri ? (patch.rotation ?? 0) : patch.rotation,
       });
 
@@ -473,6 +477,38 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     } catch (e) {
       reportError('library', e);
       throw new Error(toMessage(e, 'Could not apply that framing.'));
+    } finally {
+      set({ busy: false });
+    }
+  },
+
+  duplicateProduct: async (id) => {
+    set({ busy: true, error: null });
+    try {
+      const existing = await repo.getProduct(id);
+      if (!existing) throw new Error('Product not found.');
+      // Reuse the same master file — crops are independent per row.
+      const created = await repo.createProduct({
+        companyId: existing.companyId,
+        formulaId: existing.formulaId,
+        imageUri: existing.imageUri,
+        width: existing.width,
+        height: existing.height,
+        crops: { ...existing.crops },
+        rotation: existing.rotation,
+      });
+      const row = await repo.getProduct(created.id);
+      const state = get();
+      const refs = await syncRefs(state, [existing.companyId], [existing.formulaId]);
+      set({
+        products: row ? upsertProduct(state.products, row) : state.products,
+        ...refs,
+        status: 'ready',
+      });
+      return created;
+    } catch (e) {
+      reportError('library', e);
+      throw new Error(toMessage(e, 'Could not duplicate that product.'));
     } finally {
       set({ busy: false });
     }

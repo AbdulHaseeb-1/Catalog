@@ -16,9 +16,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ProductTile } from '@/components/product-tile';
 import { ScreenHeader } from '@/components/screen-header';
 import { ThemedText } from '@/components/themed-text';
+import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Fab } from '@/components/ui/fab';
+import { Sheet } from '@/components/ui/sheet';
 import { FabLayout, Screen, TabBar } from '@/constants/layout';
 import { Radii, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -40,6 +42,7 @@ export default function ProductsScreen() {
 
   const products = useLibraryStore((s) => s.products);
   const companies = useLibraryStore((s) => s.companies);
+  const formulas = useLibraryStore((s) => s.formulas);
   const status = useLibraryStore((s) => s.status);
   const storeError = useLibraryStore((s) => s.error);
   const refresh = useLibraryStore((s) => s.refresh);
@@ -47,12 +50,16 @@ export default function ProductsScreen() {
   const removeProduct = useLibraryStore((s) => s.removeProduct);
   const undoRemoveProducts = useLibraryStore((s) => s.undoRemoveProducts);
   const applyFramingTo = useLibraryStore((s) => s.applyFramingTo);
+  const duplicateProduct = useLibraryStore((s) => s.duplicateProduct);
 
   const [query, setQuery] = useState('');
   const [companyId, setCompanyId] = useState<string>(ALL);
+  const [formulaId, setFormulaId] = useState<string>(ALL);
   const [refreshing, setRefreshing] = useState(false);
   /** Pending undo for the last delete — cleared on a timer. */
   const [undo, setUndo] = useState<{ ids: string[]; label: string } | null>(null);
+  /** Product whose action sheet is open. */
+  const [menu, setMenu] = useState<ProductWithRefs | null>(null);
 
   useEffect(() => {
     if (!undo) return;
@@ -69,12 +76,13 @@ export default function ProductsScreen() {
   const visible = useMemo(() => {
     return products.filter((product) => {
       if (companyId !== ALL && product.companyId !== companyId) return false;
+      if (formulaId !== ALL && product.formulaId !== formulaId) return false;
       if (!query.trim()) return true;
       return (
         matchesQuery(product.formulaName, query) || matchesQuery(product.companyName, query)
       );
     });
-  }, [products, companyId, query]);
+  }, [products, companyId, formulaId, query]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -89,6 +97,15 @@ export default function ProductsScreen() {
       setRefreshing(false);
     }
   }, [refresh, clearError]);
+
+  const runDuplicate = async (product: ProductWithRefs) => {
+    try {
+      await duplicateProduct(product.id);
+      Alert.alert('Duplicated', 'A copy was added with the same photo and framing.');
+    } catch (e) {
+      Alert.alert('Could not duplicate', toMessage(e));
+    }
+  };
 
   /** Copy one product's framing onto the rest of its company's range. */
   const shareFraming = async (product: ProductWithRefs) => {
@@ -106,33 +123,29 @@ export default function ProductsScreen() {
     try {
       await applyFramingTo(
         siblings.map((p) => p.id),
-        { crop: product.crop, rotation: product.rotation }
+        { crops: product.crops, rotation: product.rotation }
       );
     } catch (e) {
       Alert.alert('Could not apply that framing', toMessage(e));
     }
   };
 
-  const openActions = (product: ProductWithRefs) => {
-    const title = `${product.formulaName} · ${product.companyName}`;
-    Alert.alert(title, undefined, [
-      { text: 'Edit', onPress: () => router.push(`/product/${product.id}`) },
-      { text: 'Use framing for this company', onPress: () => void shareFraming(product) },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await removeProduct(product.id);
-            // Soft deleted, so this is offered instead of a confirm up front.
-            setUndo({ ids: [product.id], label: product.formulaName });
-          } catch (e) {
-            Alert.alert('Could not delete', toMessage(e));
-          }
-        },
-      },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+  /**
+   * Android's Alert only renders three buttons (negative / neutral /
+   * positive), so a four-item menu silently loses one. A sheet keeps every
+   * action reachable on both platforms.
+   */
+  const openActions = (product: ProductWithRefs) => setMenu(product);
+
+  const deleteProduct = async (product: ProductWithRefs) => {
+    setMenu(null);
+    try {
+      await removeProduct(product.id);
+      // Soft deleted, so undo is offered instead of a confirm up front.
+      setUndo({ ids: [product.id], label: product.formulaName });
+    } catch (e) {
+      Alert.alert('Could not delete', toMessage(e));
+    }
   };
 
   const runUndo = async () => {
@@ -231,6 +244,29 @@ export default function ProductsScreen() {
                   ))}
               </ScrollView>
             ) : null}
+
+            {formulas.length > 1 ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={[styles.filters, { paddingHorizontal: padX }]}>
+                <Chip
+                  label="All formulas"
+                  selected={formulaId === ALL}
+                  onPress={() => setFormulaId(ALL)}
+                />
+                {formulas
+                  .filter((formula) => formula.productCount > 0)
+                  .map((formula) => (
+                    <Chip
+                      key={formula.id}
+                      label={formula.name}
+                      selected={formulaId === formula.id}
+                      onPress={() => setFormulaId(formula.id)}
+                    />
+                  ))}
+              </ScrollView>
+            ) : null}
           </>
         ) : null}
 
@@ -283,6 +319,46 @@ export default function ProductsScreen() {
         )}
       </View>
 
+      <Sheet visible={!!menu} onClose={() => setMenu(null)} title={menu?.formulaName ?? ''}>
+        <View style={styles.menu}>
+          <ThemedText themeColor="textSecondary" style={styles.menuSub}>
+            {menu?.companyName}
+          </ThemedText>
+          <Button
+            title="Edit product"
+            variant="secondary"
+            onPress={() => {
+              const id = menu?.id;
+              setMenu(null);
+              if (id) router.push(`/product/${id}`);
+            }}
+          />
+          <Button
+            title="Use this framing for the company"
+            variant="ghost"
+            onPress={() => {
+              const target = menu;
+              setMenu(null);
+              if (target) void shareFraming(target);
+            }}
+          />
+          <Button
+            title="Duplicate product"
+            variant="ghost"
+            onPress={() => {
+              const target = menu;
+              setMenu(null);
+              if (target) void runDuplicate(target);
+            }}
+          />
+          <Button
+            title="Delete product"
+            variant="danger"
+            onPress={() => menu && void deleteProduct(menu)}
+          />
+        </View>
+      </Sheet>
+
       {undo ? (
         <Pressable
           accessibilityRole="button"
@@ -325,6 +401,8 @@ const styles = StyleSheet.create({
     maxWidth: Screen.maxWidth,
     alignSelf: 'center',
   },
+  menu: { gap: Spacing.two, paddingBottom: Spacing.two },
+  menuSub: { fontSize: 13, marginBottom: Spacing.one },
   undo: {
     position: 'absolute',
     left: Spacing.three,

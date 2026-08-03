@@ -17,30 +17,29 @@ type Props = {
   /** Quarter turns applied before the crop, matching the export pipeline. */
   rotation?: Rotation;
   /**
-   * Cell shape to render into (W/H). Defaults to the measured box, which is
-   * what a square tile or a fixed-aspect card wants.
+   * How the crop meets the box. `cover` fills it (the box should already be
+   * the crop's shape); `contain` fits the whole crop inside with white space,
+   * which is what a PDF cell does.
    */
-  aspect?: number;
+  fit?: 'cover' | 'contain';
   style?: StyleProp<ViewStyle>;
   transition?: number;
   accessibilityLabel?: string;
 };
 
 /**
- * Shows the part of an image a product is actually framed to.
+ * Shows the part of an image a product is framed to.
  *
- * Rotation then crop, in that order — the same order the exporter uses — and
- * the crop is reshaped to the box's aspect with the same maths. A tile here
- * and a cell in the PDF therefore show the same pixels; the app showing an
- * uncropped shot the catalogue then trims was the whole reason framing felt
- * unpredictable.
+ * Rotation then crop, in that order — the same order the exporter uses. What
+ * is drawn is exactly the boxed region and nothing more, so a tile here and a
+ * cell in the PDF show the same pixels.
  */
 export function CroppedImage({
   uri,
   crop,
   sourceSize,
   rotation = 0,
-  aspect,
+  fit = 'cover',
   style,
   transition = 120,
   accessibilityLabel,
@@ -59,17 +58,22 @@ export function CroppedImage({
   // fractions have to be resolved in.
   const uprightSize = sourceSize ?? null;
   const framedSize = uprightSize ? rotatedSize(uprightSize, rotation) : null;
-
-  const targetAspect = aspect ?? (box ? box.width / box.height : 1);
-  const rect = box ? effectiveCrop(crop, framedSize, targetAspect) : null;
+  const rect = effectiveCrop(crop, framedSize);
 
   const placed =
     rect && box && uprightSize && framedSize
       ? (() => {
-          const scale = Math.max(box.width / rect.width, box.height / rect.height);
+          const scale =
+            fit === 'contain'
+              ? Math.min(box.width / rect.width, box.height / rect.height)
+              : Math.max(box.width / rect.width, box.height / rect.height);
+          // Centre the crop in the box; with `cover` and a matching shape this
+          // lands flush, with `contain` it leaves the white margin a cell has.
+          const offsetX = (box.width - rect.width * scale) / 2;
+          const offsetY = (box.height - rect.height * scale) / 2;
           return {
-            left: -rect.originX * scale,
-            top: -rect.originY * scale,
+            left: offsetX - rect.originX * scale,
+            top: offsetY - rect.originY * scale,
             // Rotating happens about the centre, so the turned image is laid
             // out inside a box of its post-rotation size and centred there.
             frameW: framedSize.width * scale,
@@ -110,7 +114,7 @@ export function CroppedImage({
           source={{ uri }}
           accessibilityLabel={accessibilityLabel}
           transition={transition}
-          contentFit="cover"
+          contentFit={fit}
           style={[
             StyleSheet.absoluteFill,
             rotation ? { transform: [{ rotate: `${rotation}deg` }] } : null,

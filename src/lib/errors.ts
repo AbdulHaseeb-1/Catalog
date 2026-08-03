@@ -13,7 +13,6 @@ export type ErrorScope =
   | 'database'
   | 'library'
   | 'image'
-  | 'backup'
   | 'pdf'
   | 'preview'
   | 'render'

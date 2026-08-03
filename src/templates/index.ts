@@ -7,6 +7,9 @@ import {
   PDF_CONTACT_BOX_HEIGHT,
   hasContactDetails,
   layoutMeta,
+  mapsHref,
+  telHref,
+  whatsAppHref,
   type BrandContact,
   type CatalogSection,
   type Product,
@@ -385,6 +388,15 @@ function renderSectionLabelPage(
 /* Image grid                                                                  */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * One pack shot, filling its cell edge to edge.
+ *
+ * `cover` scales the picture up or down until it covers the whole cell, so a
+ * photo smaller than the cell is enlarged rather than left floating in white.
+ * Nothing is lost to that: the crop editor locks its frame to this exact cell
+ * shape, so the image arrives already the right proportions and `cover` has
+ * nothing to trim.
+ */
 function imgCell(
   src: string | null,
   w: number,
@@ -400,7 +412,7 @@ function imgCell(
     borders.bottom ? `border-bottom:${CELL_GAP}px solid ${CELL_LINE}` : 'border-bottom:0',
   ].join(';');
 
-  return `<td width="${w}" height="${h}" style="width:${w}px;height:${h}px;max-width:${w}px;max-height:${h}px;margin:0;padding:0;${borderCss};line-height:0;font-size:0;vertical-align:top;overflow:hidden;background:#111;box-sizing:border-box;">${img}</td>`;
+  return `<td width="${w}" height="${h}" style="width:${w}px;height:${h}px;max-width:${w}px;max-height:${h}px;margin:0;padding:0;${borderCss};line-height:0;font-size:0;vertical-align:top;overflow:hidden;background:#FFFFFF;box-sizing:border-box;">${img}</td>`;
 }
 
 function emptyCell(w: number, h: number, borders: { right: boolean; bottom: boolean }): string {
@@ -418,24 +430,70 @@ function emptyCell(w: number, h: number, borders: { right: boolean; bottom: bool
 const CONTACT_BOX_HEIGHT = PDF_CONTACT_BOX_HEIGHT;
 
 /**
+ * One phone row: label + number. Number is WhatsApp (primary) with optional
+ * Call link. Display keeps the typed text; links use normalized digits.
+ */
+function phoneLine(label: string, raw: string): string {
+  const display = raw.trim();
+  if (!display) return '';
+  const wa = whatsAppHref(display);
+  const tel = telHref(display);
+  const numberHtml = wa
+    ? `<a href="${wa}" style="color:${ACCENT};text-decoration:none;font-weight:700;">${escapeHtml(
+        display
+      )}</a>`
+    : `<span style="font-weight:700;color:${INK};">${escapeHtml(display)}</span>`;
+  const callHtml = tel
+    ? ` <a href="${tel}" style="color:${MUTED};text-decoration:none;font-size:9px;font-weight:600;">Call</a>`
+    : '';
+  const chatHtml = wa
+    ? ` <a href="${wa}" style="color:${MUTED};text-decoration:none;font-size:9px;font-weight:600;">Chat</a>`
+    : '';
+  return `<div style="font-size:10px;line-height:14px;color:${INK};letter-spacing:0.1px;">
+    <span style="color:${MUTED};font-weight:600;">${escapeHtml(label)} · </span>${numberHtml}${chatHtml}${callHtml}
+  </div>`;
+}
+
+/** Address text only; wraps a Google Maps link when `mapsUrl` is set. */
+function addressLine(address: string, mapsUrl: string): string {
+  const display = address.trim().replace(/\s*\n\s*/g, ' · ');
+  if (!display) return '';
+  const href = mapsHref(mapsUrl);
+  const body = href
+    ? `<a href="${escapeHtml(href)}" style="color:${ACCENT};text-decoration:none;">${escapeHtml(
+        display
+      )}</a>`
+    : escapeHtml(display);
+  return `<div style="font-size:9px;line-height:12px;color:${MUTED};margin-bottom:2px;">${body}</div>`;
+}
+
+/**
  * Your details, at the foot of every image page — the page is otherwise a
  * wall of pack shots with nothing saying who to call about them.
+ * Address opens Maps; CEO and office numbers open WhatsApp.
  */
 function renderContactBox(contact: BrandContact, pageWidth: number): string {
   const name = contact.name.trim();
-  const address = contact.address.trim().replace(/\s*\n\s*/g, ' · ');
-  const phone = contact.phone.trim();
+  const address = contact.address.trim();
+  const mapsUrl = contact.mapsUrl?.trim() ?? '';
+  const ceo = contact.ceoPhone.trim();
+  const office = contact.officePhone.trim();
+  const hasMaps = !!(address && mapsHref(mapsUrl));
 
   const right = [
-    address
-      ? `<div style="font-size:9px;line-height:13px;color:${MUTED};">${escapeHtml(address)}</div>`
-      : '',
-    phone
-      ? `<div style="font-size:10px;line-height:14px;font-weight:700;color:${INK};letter-spacing:0.2px;">${escapeHtml(
-          phone
-        )}</div>`
-      : '',
+    addressLine(address, mapsUrl),
+    phoneLine('CEO', ceo),
+    phoneLine('Office', office),
   ].join('');
+
+  const tips: string[] = [];
+  if (hasMaps) tips.push('address for Maps');
+  if (ceo || office) tips.push('a number for WhatsApp');
+  const tipHtml = tips.length
+    ? `<div style="font-size:8px;line-height:11px;color:${MUTED};margin-top:2px;">
+            Tap ${tips.join(' or ')}
+          </div>`
+    : '';
 
   return `
     <table width="${pageWidth}" height="${CONTACT_BOX_HEIGHT}" cellspacing="0" cellpadding="0" border="0"
@@ -446,6 +504,7 @@ function renderContactBox(contact: BrandContact, pageWidth: number): string {
           <div style="font-size:12px;line-height:16px;font-weight:700;color:${INK};letter-spacing:-0.1px;">
             ${escapeHtml(name)}
           </div>
+          ${tipHtml}
         </td>
         <td align="right" style="text-align:right;vertical-align:middle;padding:0 ${MARGIN_X / 2}px;">
           ${right}
@@ -455,9 +514,8 @@ function renderContactBox(contact: BrandContact, pageWidth: number): string {
 }
 
 /**
- * Full-bleed grid of pack shots. Each image arrives already rendered to this
- * layout's cell aspect, so the `object-fit: cover` in `imgCell` is only a
- * safety net for products whose source size was never recorded.
+ * Grid of pack shots, each filling its cell edge to edge. Images arrive
+ * already framed to the 2×2 cell shape, so cover has nothing left to trim.
  */
 function renderGridPage(
   ctx: PdfRenderContext,
@@ -541,7 +599,7 @@ export function renderCatalogHtml(ctx: PdfRenderContext): string {
 <html>
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=${pageWidth}, initial-scale=1" />
+  <meta name="viewport" content="width=${pageWidth}, initial-scale=1, maximum-scale=1" />
   <title>${escapeHtml(doc.title)}</title>
   <style>
     @page { margin: 0 !important; size: ${pageWidth}px ${pageHeight}px; }
@@ -549,18 +607,32 @@ export function renderCatalogHtml(ctx: PdfRenderContext): string {
       margin: 0 !important;
       padding: 0 !important;
       width: ${pageWidth}px !important;
+      min-height: ${pageHeight}px !important;
       background: #fff;
       font-family: ${FONT_STACK};
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    .page:last-child { page-break-after: auto !important; }
+    .page {
+      page-break-after: always !important;
+      page-break-inside: avoid !important;
+      break-after: page !important;
+      break-inside: avoid !important;
+    }
+    .page:last-child {
+      page-break-after: auto !important;
+      break-after: auto !important;
+    }
     table { border-collapse: collapse !important; border-spacing: 0 !important; }
     img {
+      display: block;
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
     }
+    a { color: ${ACCENT}; text-decoration: none; }
   </style>
 </head>
 <body>

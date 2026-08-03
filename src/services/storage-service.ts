@@ -18,7 +18,7 @@ export type StorageReport = {
   /** Bytes held by files on disk that nothing references. */
   orphanBytes: number;
   orphanCount: number;
-  /** Generated PDFs, which are only ever a cache. */
+  /** Catalogue PDFs saved under Documents/Catalogs (kept). */
   exportBytes: number;
   /** Products sitting in the bin, still restorable. */
   binnedCount: number;
@@ -73,8 +73,9 @@ export async function inspectStorage(): Promise<StorageReport> {
 export type SweepResult = { freedBytes: number; orphans: number; purged: number };
 
 /**
- * Reclaim what is safe to reclaim: unreferenced files, generated PDFs, and
- * products binned longer ago than the undo window.
+ * Reclaim what is safe to reclaim: unreferenced image files, legacy temp PDF
+ * cache under exports/, and products binned longer ago than the undo window.
+ * Documents/Catalogs is never wiped — those are saved catalogues.
  */
 export async function sweepStorage(
   opts: { purgeBin?: boolean } = {}
@@ -84,7 +85,11 @@ export async function sweepStorage(
   await deleteImageFiles(orphans);
 
   const exports = await measureExportBytes();
-  if (exports.folder) await deleteFolderContents(exports.folder);
+  let reclaimedPdf = 0;
+  if (exports.legacyFolder && exports.legacyBytes > 0) {
+    reclaimedPdf = exports.legacyBytes;
+    await deleteFolderContents(exports.legacyFolder);
+  }
 
   let purged = 0;
   let purgedBytes = 0;
@@ -100,7 +105,7 @@ export async function sweepStorage(
   }
 
   return {
-    freedBytes: orphanBytes + exports.bytes + purgedBytes,
+    freedBytes: orphanBytes + reclaimedPdf + purgedBytes,
     orphans: orphans.length,
     purged,
   };

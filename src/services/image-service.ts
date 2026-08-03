@@ -332,18 +332,34 @@ export async function normalizeImportedImage(
 export async function renderRotatedCopy(
   sourceUri: string,
   rotation: Rotation
-): Promise<{ uri: string; width: number; height: number }> {
+): Promise<{
+  uri: string;
+  /** Size of the rotated copy — the space a crop is drawn in. */
+  width: number;
+  height: number;
+  /** Size of the upright master, which is what the product row stores. */
+  baseWidth: number;
+  baseHeight: number;
+}> {
   const absolute = resolveImageUri(sourceUri) ?? sourceUri;
+  const base = await getImageSize(absolute);
+
   if (!rotation) {
-    const size = await getImageSize(absolute);
-    return { uri: absolute, ...size };
+    return { uri: absolute, ...base, baseWidth: base.width, baseHeight: base.height };
   }
+
   const produced = await renderAndSave(absolute, {
     rotation,
     maxWidth: STORED_MAX_WIDTH,
     compress: STORED_QUALITY,
   });
-  return { uri: produced.uri, width: produced.width, height: produced.height };
+  return {
+    uri: produced.uri,
+    width: produced.width,
+    height: produced.height,
+    baseWidth: base.width,
+    baseHeight: base.height,
+  };
 }
 
 /**
@@ -408,24 +424,63 @@ export async function measureImageBytes(relativePaths: string[]): Promise<number
   return total;
 }
 
-/** Bytes held by generated PDFs, which are only ever a cache. */
-export async function measureExportBytes(): Promise<{ bytes: number; folder: string | null }> {
-  const root = documentRoot();
-  if (!root) return { bytes: 0, folder: null };
-  const folder = `${withTrailingSlash(root)}exports`;
+/**
+ * Bytes held under a documents subfolder (Catalogs or legacy exports).
+ * Returns 0 when the folder does not exist.
+ */
+async function measureFolderBytes(folder: string): Promise<number> {
   try {
     const info = await FileSystem.getInfoAsync(folder);
-    if (!info.exists) return { bytes: 0, folder };
+    if (!info.exists) return 0;
     const names = await FileSystem.readDirectoryAsync(folder);
     let total = 0;
     for (const name of names) {
       const file = await FileSystem.getInfoAsync(`${folder}/${name}`);
       if (file.exists && !file.isDirectory) total += file.size ?? 0;
     }
-    return { bytes: total, folder };
+    return total;
   } catch {
-    return { bytes: 0, folder };
+    return 0;
   }
+}
+
+/**
+ * Saved catalogue PDFs live in Documents/Catalogs (kept permanently).
+ * Legacy temp files may still sit under Documents/exports.
+ */
+export async function measureExportBytes(): Promise<{
+  bytes: number;
+  /** User-facing catalogues folder (not wiped by Free up space). */
+  catalogsFolder: string | null;
+  catalogsBytes: number;
+  /** Old cache folder — safe to wipe. */
+  legacyFolder: string | null;
+  legacyBytes: number;
+}> {
+  const root = documentRoot();
+  if (!root) {
+    return {
+      bytes: 0,
+      catalogsFolder: null,
+      catalogsBytes: 0,
+      legacyFolder: null,
+      legacyBytes: 0,
+    };
+  }
+  const base = withTrailingSlash(root);
+  const catalogsFolder = `${base}Catalogs`;
+  const legacyFolder = `${base}exports`;
+  const [catalogsBytes, legacyBytes] = await Promise.all([
+    measureFolderBytes(catalogsFolder),
+    measureFolderBytes(legacyFolder),
+  ]);
+  return {
+    bytes: catalogsBytes + legacyBytes,
+    catalogsFolder,
+    catalogsBytes,
+    legacyFolder,
+    legacyBytes,
+  };
 }
 
 export async function deleteFolderContents(folder: string): Promise<void> {

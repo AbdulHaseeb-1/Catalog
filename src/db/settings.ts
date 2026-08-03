@@ -27,16 +27,26 @@ function coerceSettings(raw: unknown): ExportSettings {
     includeSectionLabels:
       value.includeSectionLabels ?? DEFAULT_EXPORT_SETTINGS.includeSectionLabels,
     includeContactBox: value.includeContactBox ?? DEFAULT_EXPORT_SETTINGS.includeContactBox,
+    framedOnly: value.framedOnly ?? DEFAULT_EXPORT_SETTINGS.framedOnly,
   };
 }
 
 function coerceContact(raw: unknown): BrandContact {
   if (!raw || typeof raw !== 'object') return EMPTY_BRAND_CONTACT;
-  const value = raw as Partial<BrandContact>;
+  const value = raw as Partial<BrandContact> & { phone?: string };
+  const ceoPhone = typeof value.ceoPhone === 'string' ? value.ceoPhone : '';
+  let officePhone = typeof value.officePhone === 'string' ? value.officePhone : '';
+  // Pre-dual-phone installs stored a single `phone` — keep it as the office line.
+  const legacyPhone = typeof value.phone === 'string' ? value.phone : '';
+  if (!ceoPhone && !officePhone && legacyPhone) {
+    officePhone = legacyPhone;
+  }
   return {
     name: typeof value.name === 'string' ? value.name : '',
     address: typeof value.address === 'string' ? value.address : '',
-    phone: typeof value.phone === 'string' ? value.phone : '',
+    mapsUrl: typeof value.mapsUrl === 'string' ? value.mapsUrl : '',
+    ceoPhone,
+    officePhone,
   };
 }
 

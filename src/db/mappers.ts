@@ -5,6 +5,7 @@ import type {
   CompanyListItem,
   Formula,
   FormulaListItem,
+  LayoutCrops,
   Product,
   ProductWithRefs,
 } from '@/types/models';
@@ -40,10 +41,16 @@ export type ProductRow = {
   image_uri: string;
   width: number | null;
   height: number | null;
+  /** 2×2 crop (legacy column names). */
   crop_x: number | null;
   crop_y: number | null;
   crop_w: number | null;
   crop_h: number | null;
+  /** 2×3 crop (absent on pre-v5 rows until migration runs). */
+  crop_2x3_x?: number | null;
+  crop_2x3_y?: number | null;
+  crop_2x3_w?: number | null;
+  crop_2x3_h?: number | null;
   rotation: number | null;
   deleted_at: string | null;
   sort_order: number;
@@ -54,14 +61,25 @@ export type ProductRow = {
 };
 
 /** A crop only counts when all four fractions are present and usable. */
-function mapCrop(row: ProductRow): NormalizedRect | null {
-  const { crop_x: x, crop_y: y, crop_w: w, crop_h: h } = row;
+function mapRect(
+  x: number | null | undefined,
+  y: number | null | undefined,
+  w: number | null | undefined,
+  h: number | null | undefined
+): NormalizedRect | null {
   if (x == null || y == null || w == null || h == null) return null;
   if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(w) || !Number.isFinite(h)) {
     return null;
   }
   if (w <= 0 || h <= 0) return null;
   return clampNormalized({ x, y, w, h });
+}
+
+function mapCrops(row: ProductRow): LayoutCrops {
+  return {
+    '2x2': mapRect(row.crop_x, row.crop_y, row.crop_w, row.crop_h),
+    '2x3': mapRect(row.crop_2x3_x, row.crop_2x3_y, row.crop_2x3_w, row.crop_2x3_h),
+  };
 }
 
 export function mapCompany(row: CompanyRow): Company {
@@ -110,7 +128,7 @@ export function mapProduct(row: ProductRow): Product {
     imageUri: row.image_uri,
     width: row.width,
     height: row.height,
-    crop: mapCrop(row),
+    crops: mapCrops(row),
     rotation: asRotation(row.rotation),
     sortOrder: row.sort_order,
     createdAt: row.created_at,

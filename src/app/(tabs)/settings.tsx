@@ -11,15 +11,8 @@ import { Screen, TabBar } from '@/constants/layout';
 import { Elevation, Radii, Spacing } from '@/constants/theme';
 import { useRecentErrors } from '@/hooks/use-recent-errors';
 import { useTheme } from '@/hooks/use-theme';
-import { confirmAction } from '@/lib/confirm';
 import { clearErrors, reportError, toMessage } from '@/lib/errors';
 import { pluralize } from '@/lib/text';
-import {
-  createBackup,
-  pickBackupFile,
-  restoreBackup,
-  shareBackup,
-} from '@/services/backup-service';
 import { invalidateEncodedImages } from '@/services/pdf-service';
 import {
   formatBytes,
@@ -38,8 +31,6 @@ export default function SettingsScreen() {
   const settings = useLibraryStore((s) => s.exportSettings);
   const contact = useLibraryStore((s) => s.brandContact);
   const setBrandContact = useLibraryStore((s) => s.setBrandContact);
-  const setExportSettings = useLibraryStore((s) => s.setExportSettings);
-  const hydrate = useLibraryStore((s) => s.hydrate);
 
   const errors = useRecentErrors();
 
@@ -63,8 +54,6 @@ export default function SettingsScreen() {
     }
   }, []);
 
-  // Walking the image folder touches the file system, so it is read after the
-  // screen is on-screen rather than as part of rendering it.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -79,74 +68,6 @@ export default function SettingsScreen() {
       cancelled = true;
     };
   }, [products.length]);
-
-  const runBackup = async () => {
-    setStorageNote(null);
-    setBusy('Preparing backup…');
-    try {
-      const result = await createBackup(settings, contact, (done, total) =>
-        setBusy(`Packing photo ${done} of ${total}…`)
-      );
-      setBusy(null);
-      setStorageNote(
-        `Backed up ${pluralize(result.products, 'product')} and ${pluralize(
-          result.images,
-          'photo'
-        )} · ${formatBytes(result.bytes)}`
-      );
-      await shareBackup(result.uri);
-    } catch (e) {
-      reportError('backup', e);
-      Alert.alert('Backup failed', toMessage(e, 'Could not create a backup.'));
-    } finally {
-      setBusy(null);
-      void readStorage();
-    }
-  };
-
-  const runRestore = async () => {
-    setStorageNote(null);
-    try {
-      const uri = await pickBackupFile();
-      if (!uri) return;
-
-      const ok = await confirmAction(
-        'Replace everything with this backup?',
-        'Every company, formula, product and photo on this device is replaced by the contents of the backup. This cannot be undone.'
-      );
-      if (!ok) return;
-
-      setBusy('Reading backup…');
-      const summary = await restoreBackup(uri, (stage, done, total) =>
-        setBusy(
-          stage === 'images' ? `Restoring photo ${done} of ${total}…` : 'Rebuilding library…'
-        )
-      );
-
-      if (summary.settings) {
-        await setExportSettings(summary.settings.exportSettings);
-        await setBrandContact(summary.settings.brandContact);
-      }
-      // The encoder caches bytes per image path, and those files just changed.
-      invalidateEncodedImages();
-      await hydrate();
-
-      Alert.alert(
-        'Restored',
-        `${pluralize(summary.products, 'product')}, ${pluralize(
-          summary.companies,
-          'company',
-          'companies'
-        )} and ${pluralize(summary.images, 'photo')} restored.`
-      );
-    } catch (e) {
-      reportError('backup', e);
-      Alert.alert('Restore failed', toMessage(e, 'Could not read that backup.'));
-    } finally {
-      setBusy(null);
-      void readStorage();
-    }
-  };
 
   const runSweep = async () => {
     setStorageNote(null);
@@ -169,7 +90,13 @@ export default function SettingsScreen() {
   };
 
   const openContact = () => {
-    setDraft(contact);
+    setDraft({
+      name: contact.name,
+      address: contact.address,
+      mapsUrl: contact.mapsUrl ?? '',
+      ceoPhone: contact.ceoPhone,
+      officePhone: contact.officePhone,
+    });
     setError(null);
     setSheetOpen(true);
   };
@@ -181,12 +108,12 @@ export default function SettingsScreen() {
       await setBrandContact({
         name: draft.name.trim(),
         address: draft.address.trim(),
-        phone: draft.phone.trim(),
+        mapsUrl: draft.mapsUrl.trim(),
+        ceoPhone: draft.ceoPhone.trim(),
+        officePhone: draft.officePhone.trim(),
       });
       setSheetOpen(false);
     } catch (e) {
-      // Previously only `finally` ran here, so a failed write closed nothing,
-      // said nothing, and surfaced as an unhandled rejection.
       setError(toMessage(e, 'Could not save your contact details.'));
     } finally {
       setSaving(false);
@@ -225,13 +152,7 @@ export default function SettingsScreen() {
         </Card>
 
         <Card>
-          <ThemedText style={styles.cardTitle}>Backup</ThemedText>
-          <ThemedText themeColor="textSecondary" style={styles.note}>
-            Your whole catalogue lives on this device — rows and photos both. A backup is one
-            file holding every product and every image, so a lost or replaced phone does not
-            mean starting again.
-          </ThemedText>
-
+          <ThemedText style={styles.cardTitle}>Storage</ThemedText>
           {busy ? (
             <View style={styles.busyRow}>
               <ActivityIndicator color={theme.primary} />
@@ -240,29 +161,11 @@ export default function SettingsScreen() {
               </ThemedText>
             </View>
           ) : null}
-
           {storageNote ? (
             <ThemedText themeColor="textSecondary" style={styles.note}>
               {storageNote}
             </ThemedText>
           ) : null}
-
-          <Button
-            title="Back up and share"
-            variant="secondary"
-            disabled={!!busy}
-            onPress={runBackup}
-          />
-          <Button
-            title="Restore from a backup"
-            variant="ghost"
-            disabled={!!busy}
-            onPress={runRestore}
-          />
-        </Card>
-
-        <Card>
-          <ThemedText style={styles.cardTitle}>Storage</ThemedText>
           {storage ? (
             <View style={styles.steps}>
               <Row icon="🖼" label="Product photos" value={formatBytes(storage.imageBytes)} compact />
@@ -272,7 +175,12 @@ export default function SettingsScreen() {
                 value={formatBytes(storage.orphanBytes)}
                 compact
               />
-              <Row icon="📄" label="Generated PDFs" value={formatBytes(storage.exportBytes)} compact />
+              <Row
+                icon="📄"
+                label="Saved PDFs (Documents/Catalogs)"
+                value={formatBytes(storage.exportBytes)}
+                compact
+              />
               <Row icon="🗑" label="In the bin" value={String(storage.binnedCount)} compact />
             </View>
           ) : (
@@ -281,8 +189,8 @@ export default function SettingsScreen() {
             </ThemedText>
           )}
           <ThemedText themeColor="textSecondary" style={styles.note}>
-            Reclaims leftover image files and cached PDFs. Deleted products stay recoverable for
-            a day, then their photos go too.
+            Reclaims leftover image files and old temp PDF cache. Saved catalogues in
+            Documents/Catalogs are kept. Deleted products stay recoverable for a day.
           </ThemedText>
           <Button
             title="Free up space"
@@ -297,28 +205,72 @@ export default function SettingsScreen() {
             <View style={styles.contactHeadText}>
               <ThemedText style={styles.cardTitle}>Your contact details</ThemedText>
               <ThemedText themeColor="textSecondary" style={styles.note}>
-                Printed in a box at the foot of every catalogue page, so whoever gets the PDF
-                knows who to call.
+                Printed at the foot of every catalogue page. Address opens Google Maps; CEO and
+                office numbers open WhatsApp.
               </ThemedText>
             </View>
           </View>
 
           {filled ? (
-            <View style={styles.contactLines}>
-              {contact.name.trim() ? (
-                <ThemedText style={styles.contactName}>{contact.name}</ThemedText>
-              ) : null}
-              {contact.address.trim() ? (
-                <ThemedText themeColor="textSecondary" style={styles.contactLine}>
-                  {contact.address}
-                </ThemedText>
-              ) : null}
-              {contact.phone.trim() ? (
-                <ThemedText themeColor="textSecondary" style={styles.contactLine}>
-                  {contact.phone}
-                </ThemedText>
-              ) : null}
-            </View>
+            <>
+              <View style={styles.contactLines}>
+                {contact.name.trim() ? (
+                  <ThemedText style={styles.contactName}>{contact.name}</ThemedText>
+                ) : null}
+                {contact.address.trim() ? (
+                  <ThemedText themeColor="textSecondary" style={styles.contactLine}>
+                    {contact.address}
+                    {contact.mapsUrl?.trim() ? ' · Maps link set' : ''}
+                  </ThemedText>
+                ) : null}
+                {contact.ceoPhone.trim() ? (
+                  <ThemedText themeColor="textSecondary" style={styles.contactLine}>
+                    CEO · {contact.ceoPhone}
+                  </ThemedText>
+                ) : null}
+                {contact.officePhone.trim() ? (
+                  <ThemedText themeColor="textSecondary" style={styles.contactLine}>
+                    Office · {contact.officePhone}
+                  </ThemedText>
+                ) : null}
+              </View>
+              <View
+                style={[
+                  styles.footerPreview,
+                  { borderColor: theme.border, backgroundColor: '#FFFFFF' },
+                ]}>
+                <ThemedText style={styles.footerPreviewLabel}>PDF footer preview</ThemedText>
+                <View style={styles.footerPreviewRow}>
+                  <View style={{ flex: 1 }}>
+                    <ThemedText style={styles.footerPreviewName} numberOfLines={1}>
+                      {contact.name.trim() || 'Your name'}
+                    </ThemedText>
+                    <ThemedText themeColor="textSecondary" style={styles.footerPreviewTip}>
+                      Tap address for Maps · number for WhatsApp / Call
+                    </ThemedText>
+                  </View>
+                  <View style={{ flex: 1, alignItems: 'flex-end' }}>
+                    {contact.address.trim() ? (
+                      <ThemedText
+                        style={[styles.footerPreviewAddr, { color: theme.primary }]}
+                        numberOfLines={2}>
+                        {contact.address.trim()}
+                      </ThemedText>
+                    ) : null}
+                    {contact.ceoPhone.trim() ? (
+                      <ThemedText style={styles.footerPreviewPhone} numberOfLines={1}>
+                        CEO · {contact.ceoPhone}
+                      </ThemedText>
+                    ) : null}
+                    {contact.officePhone.trim() ? (
+                      <ThemedText style={styles.footerPreviewPhone} numberOfLines={1}>
+                        Office · {contact.officePhone}
+                      </ThemedText>
+                    ) : null}
+                  </View>
+                </View>
+              </View>
+            </>
           ) : (
             <ThemedText themeColor="textSecondary" style={styles.contactEmpty}>
               Not set — the contact box is left off until you add them.
@@ -420,7 +372,7 @@ export default function SettingsScreen() {
         visible={sheetOpen}
         onClose={() => setSheetOpen(false)}
         title="Your contact details"
-        subtitle="These print at the foot of every catalogue page.">
+        subtitle="Printed on every catalogue page. Address opens Maps; numbers open WhatsApp.">
         <TextField
           label="Name"
           value={draft.name}
@@ -436,14 +388,33 @@ export default function SettingsScreen() {
           multiline
           numberOfLines={2}
           style={styles.multiline}
+          hint="Shown as text on the PDF. Pair with a Maps link below to make it tappable."
         />
         <TextField
-          label="Phone"
-          value={draft.phone}
-          onChangeText={(phone) => setDraft((d) => ({ ...d, phone }))}
-          placeholder="0300 1234567"
+          label="Google Maps link"
+          value={draft.mapsUrl}
+          onChangeText={(mapsUrl) => setDraft((d) => ({ ...d, mapsUrl }))}
+          placeholder="https://maps.google.com/?q=…"
+          autoCapitalize="none"
+          autoCorrect={false}
+          keyboardType="url"
+          hint="Paste a Google Maps share link. Only the address text is shown — tap opens this URL."
+        />
+        <TextField
+          label="CEO phone"
+          value={draft.ceoPhone}
+          onChangeText={(ceoPhone) => setDraft((d) => ({ ...d, ceoPhone }))}
+          placeholder="923001234567"
           keyboardType="phone-pad"
-          hint="Separate several numbers with a comma."
+          hint="Include country code for WhatsApp (e.g. 92…)."
+        />
+        <TextField
+          label="Office phone"
+          value={draft.officePhone}
+          onChangeText={(officePhone) => setDraft((d) => ({ ...d, officePhone }))}
+          placeholder="924212345678"
+          keyboardType="phone-pad"
+          hint="Second line on the PDF footer — also opens WhatsApp."
         />
         {error ? (
           <ThemedText style={[styles.sheetError, { color: theme.danger }]}>{error}</ThemedText>
@@ -629,6 +600,45 @@ const styles = StyleSheet.create({
     fontSize: 13.5,
     lineHeight: 19,
     marginTop: Spacing.three,
+  },
+  footerPreview: {
+    marginTop: Spacing.three,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: Radii.md,
+    padding: Spacing.two,
+    gap: 6,
+  },
+  footerPreviewLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    opacity: 0.55,
+  },
+  footerPreviewRow: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+    alignItems: 'center',
+  },
+  footerPreviewName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#101820',
+  },
+  footerPreviewTip: {
+    fontSize: 9,
+    marginTop: 2,
+  },
+  footerPreviewAddr: {
+    fontSize: 10,
+    textAlign: 'right',
+    marginBottom: 2,
+  },
+  footerPreviewPhone: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#101820',
+    textAlign: 'right',
   },
   multiline: {
     minHeight: 72,

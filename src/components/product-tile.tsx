@@ -5,7 +5,8 @@ import { ThemedText } from '@/components/themed-text';
 import { Radii, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { resolveImageUri } from '@/services/image-service';
-import type { ProductWithRefs } from '@/types/models';
+import { useLibraryStore } from '@/stores/library-store';
+import { cropForLayout, hasCropForLayout, type ProductWithRefs } from '@/types/models';
 
 type Props = {
   product: ProductWithRefs;
@@ -29,7 +30,10 @@ export function ProductTile({
   context = 'all',
 }: Props) {
   const theme = useTheme();
+  const layoutId = useLibraryStore((s) => s.exportSettings.layoutId);
   const uri = resolveImageUri(product.imageUri);
+  const crop = cropForLayout(product, layoutId);
+  const framed = hasCropForLayout(product, layoutId);
   const primary = context === 'formula' ? product.companyName : product.formulaName;
   const secondary = context === 'all' ? product.companyName : null;
 
@@ -54,14 +58,13 @@ export function ProductTile({
           // cell would — the tile and the printed page agree.
           <CroppedImage
             uri={uri}
-            crop={product.crop}
+            crop={crop}
             sourceSize={
               product.width && product.height
                 ? { width: product.width, height: product.height }
                 : null
             }
             rotation={product.rotation}
-            aspect={1}
             style={styles.image}
           />
         ) : (
@@ -74,6 +77,11 @@ export function ProductTile({
         {selected ? (
           <View style={[styles.tick, { backgroundColor: theme.primary }]}>
             <ThemedText style={[styles.tickMark, { color: theme.fabIcon }]}>✓</ThemedText>
+          </View>
+        ) : null}
+        {!framed && uri ? (
+          <View style={[styles.badge, { backgroundColor: theme.danger }]}>
+            <ThemedText style={styles.badgeText}>Crop</ThemedText>
           </View>
         ) : null}
       </View>
@@ -127,6 +135,20 @@ const styles = StyleSheet.create({
   tickMark: {
     fontSize: 13,
     fontWeight: '800',
+  },
+  badge: {
+    position: 'absolute',
+    left: 6,
+    bottom: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: Radii.sm,
+  },
+  badgeText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
   meta: {
     gap: 1,

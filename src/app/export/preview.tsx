@@ -98,7 +98,26 @@ export default function ExportPreviewScreen() {
         setPdfUri(result.uri);
         const pages =
           result.numberOfPages != null ? ` · ${pluralize(result.numberOfPages, 'page')}` : '';
-        setMessage({ text: `PDF ready${pages}. Tap Share to send or save it.`, failed: false });
+        const where = result.savedAs ? ` Saved to ${result.savedAs}.` : '';
+        const warn =
+          result.failedImages && result.failedImages > 0
+            ? ` ${result.failedImages} image(s) could not be embedded.`
+            : '';
+        setMessage({
+          text: `PDF ready${pages}.${where} Opening share sheet…${warn}`,
+          failed: false,
+        });
+        // Offer the system share/open sheet immediately so the user can open
+        // or send the file from Documents/Catalogs without an extra tap.
+        try {
+          await sharePdf(result.uri);
+        } catch (shareErr) {
+          reportError('pdf', shareErr);
+          setMessage({
+            text: `PDF ready${pages}.${where} Tap Share to send it.${warn}`,
+            failed: false,
+          });
+        }
       }
     } catch (e) {
       setMessage({

@@ -54,7 +54,7 @@ export default function EditProductScreen() {
       initialCompanyId={product.companyId}
       initialFormulaId={product.formulaId}
       initialImageUri={product.imageUri}
-      initialCrop={product.crop}
+      initialCrops={product.crops}
       initialImageSize={
         product.width && product.height
           ? { width: product.width, height: product.height }
@@ -62,12 +62,12 @@ export default function EditProductScreen() {
       }
       initialRotation={product.rotation}
       submitLabel="Save changes"
-      onSubmit={async ({ companyId, formulaId, sourceUri, crop, sourceSize, rotation }) => {
+      onSubmit={async ({ companyId, formulaId, sourceUri, crops, sourceSize, rotation }) => {
         await editProduct(productId, {
           companyId,
           formulaId,
           sourceUri,
-          crop,
+          crops,
           sourceSize,
           rotation,
         });

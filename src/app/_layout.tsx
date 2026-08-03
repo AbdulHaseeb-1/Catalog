@@ -1,4 +1,5 @@
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider, type ErrorBoundaryProps } from 'expo-router';
+import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { Stack, type ErrorBoundaryProps } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, useColorScheme, View } from 'react-native';
@@ -17,7 +18,7 @@ const HYDRATE_TIMEOUT_MS = 20_000;
 // caught and logged.
 installGlobalErrorHandlers();
 
-// Floating on purpose (per the SDK 57 docs), but a rejection here must not
+// Floating on purpose (per the SDK 54 docs), but a rejection here must not
 // become an unhandled rejection.
 SplashScreen.preventAutoHideAsync().catch((error: unknown) => {
   reportError('startup', error);
