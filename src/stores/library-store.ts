@@ -108,8 +108,6 @@ interface LibraryState {
     ids: string[],
     framing: { crops: LayoutCrops; rotation?: Rotation }
   ) => Promise<number>;
-  /** Clone a product (same photo, framing, company & formula). */
-  duplicateProduct: (id: string) => Promise<Product>;
   /** Soft delete — reversible with `undoRemoveProducts`. */
   removeProduct: (id: string) => Promise<void>;
   undoRemoveProducts: (ids: string[]) => Promise<number>;
@@ -329,6 +327,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   addProduct: async ({ companyId, formulaId, sourceUri, crops, rotation, sourceSize }) => {
     set({ busy: true, error: null });
     try {
+      // Fail before writing the image so a blocked duplicate leaves no orphan file.
+      await repo.assertUniqueCompanyFormula(companyId, formulaId);
       const image = await saveProductImage(sourceUri, {
         alreadyNormalized: sourceSize ?? undefined,
       });
@@ -365,11 +365,20 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     set({ busy: true, error: null });
     const created: string[] = [];
     const failures: string[] = [];
+    /** Pairs already accepted in this batch — batch rows can collide with each other. */
+    const claimed = new Set<string>();
 
     try {
       for (let i = 0; i < items.length; i++) {
         const item = items[i];
+        const pairKey = `${companyId}::${item.formulaId}`;
         try {
+          if (claimed.has(pairKey)) {
+            throw new Error(
+              'This batch has two photos for the same formula under this company. Keep one and re-tag the other.'
+            );
+          }
+          await repo.assertUniqueCompanyFormula(companyId, item.formulaId);
           const image = await saveProductImage(item.sourceUri, {
             alreadyNormalized: item.sourceSize ?? undefined,
           });
@@ -382,6 +391,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
             crops: item.crops ?? {},
             rotation: item.rotation,
           });
+          claimed.add(pairKey);
           created.push(product.id);
         } catch (e) {
           // One bad photo must not throw away the rest of the batch.
@@ -477,38 +487,6 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     } catch (e) {
       reportError('library', e);
       throw new Error(toMessage(e, 'Could not apply that framing.'));
-    } finally {
-      set({ busy: false });
-    }
-  },
-
-  duplicateProduct: async (id) => {
-    set({ busy: true, error: null });
-    try {
-      const existing = await repo.getProduct(id);
-      if (!existing) throw new Error('Product not found.');
-      // Reuse the same master file — crops are independent per row.
-      const created = await repo.createProduct({
-        companyId: existing.companyId,
-        formulaId: existing.formulaId,
-        imageUri: existing.imageUri,
-        width: existing.width,
-        height: existing.height,
-        crops: { ...existing.crops },
-        rotation: existing.rotation,
-      });
-      const row = await repo.getProduct(created.id);
-      const state = get();
-      const refs = await syncRefs(state, [existing.companyId], [existing.formulaId]);
-      set({
-        products: row ? upsertProduct(state.products, row) : state.products,
-        ...refs,
-        status: 'ready',
-      });
-      return created;
-    } catch (e) {
-      reportError('library', e);
-      throw new Error(toMessage(e, 'Could not duplicate that product.'));
     } finally {
       set({ busy: false });
     }

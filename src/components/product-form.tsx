@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { useMemo, useState, type ReactNode } from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -96,6 +97,7 @@ export function ProductForm({
   footer,
 }: Props) {
   const theme = useTheme();
+  const router = useRouter();
   const insets = useSafeAreaInsets();
 
   const companies = useLibraryStore((s) => s.companies);
@@ -187,13 +189,16 @@ export function ProductForm({
     [cropPixels, pageContext.layoutId, pageContext.pageSize, pageContext.contactBox]
   );
 
-  const duplicate = useMemo(() => {
-    if (!companyId || !formulaId) return false;
-    return products.some(
-      (product) =>
-        product.companyId === companyId &&
-        product.formulaId === formulaId &&
-        product.id !== productId
+  /** Existing live product for this company + formula (blocked on create). */
+  const duplicateOf = useMemo(() => {
+    if (!companyId || !formulaId) return null;
+    return (
+      products.find(
+        (product) =>
+          product.companyId === companyId &&
+          product.formulaId === formulaId &&
+          product.id !== productId
+      ) ?? null
     );
   }, [products, companyId, formulaId, productId]);
 
@@ -268,6 +273,11 @@ export function ProductForm({
     if (!companyId) return setError('Select a company.');
     if (!formulaId) return setError('Select a formula.');
     if (!hasImage) return setError('Add a photo of the pack.');
+    if (duplicateOf) {
+      return setError(
+        `“${duplicateOf.companyName}” already has “${duplicateOf.formulaName}”. Open that product instead of adding another.`
+      );
+    }
 
     setSaving(true);
     setError(null);
@@ -403,7 +413,7 @@ export function ProductForm({
                         crop={c}
                         sourceSize={imageSize}
                         rotation={activeRotation}
-                        style={StyleSheet.absoluteFillObject}
+                        style={StyleSheet.absoluteFill}
                         transition={0}
                       />
                     </View>
@@ -492,11 +502,18 @@ export function ProductForm({
           emptyHint="No formulas yet — type a name to add the first one."
         />
 
-        {duplicate ? (
-          <ThemedText themeColor="textSecondary" style={styles.notice}>
-            This company already has a product for that formula. Adding another is fine — both
-            images will appear in the catalogue.
-          </ThemedText>
+        {duplicateOf ? (
+          <View style={styles.dupBlock}>
+            <ThemedText style={[styles.notice, { color: theme.danger }]}>
+              This company already has “{duplicateOf.formulaName}”. Each company can only list a
+              formula once — open the existing product to change the pack shot or crop.
+            </ThemedText>
+            <Button
+              title="Open existing product"
+              variant="secondary"
+              onPress={() => router.push(`/product/${duplicateOf.id}`)}
+            />
+          </View>
         ) : null}
 
         {error ? (
@@ -507,6 +524,7 @@ export function ProductForm({
           title={submitLabel}
           variant="primary"
           loading={saving}
+          disabled={!!duplicateOf}
           onPress={submit}
           style={styles.submit}
         />
@@ -683,6 +701,9 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     lineHeight: 18,
     marginTop: -Spacing.two,
+  },
+  dupBlock: {
+    gap: Spacing.two,
   },
   error: {
     fontSize: 13.5,

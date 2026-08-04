@@ -50,7 +50,6 @@ export default function ProductsScreen() {
   const removeProduct = useLibraryStore((s) => s.removeProduct);
   const undoRemoveProducts = useLibraryStore((s) => s.undoRemoveProducts);
   const applyFramingTo = useLibraryStore((s) => s.applyFramingTo);
-  const duplicateProduct = useLibraryStore((s) => s.duplicateProduct);
 
   const [query, setQuery] = useState('');
   const [companyId, setCompanyId] = useState<string>(ALL);
@@ -97,15 +96,6 @@ export default function ProductsScreen() {
       setRefreshing(false);
     }
   }, [refresh, clearError]);
-
-  const runDuplicate = async (product: ProductWithRefs) => {
-    try {
-      await duplicateProduct(product.id);
-      Alert.alert('Duplicated', 'A copy was added with the same photo and framing.');
-    } catch (e) {
-      Alert.alert('Could not duplicate', toMessage(e));
-    }
-  };
 
   /** Copy one product's framing onto the rest of its company's range. */
   const shareFraming = async (product: ProductWithRefs) => {
@@ -340,15 +330,6 @@ export default function ProductsScreen() {
               const target = menu;
               setMenu(null);
               if (target) void shareFraming(target);
-            }}
-          />
-          <Button
-            title="Duplicate product"
-            variant="ghost"
-            onPress={() => {
-              const target = menu;
-              setMenu(null);
-              if (target) void runDuplicate(target);
             }}
           />
           <Button

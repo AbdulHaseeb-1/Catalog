@@ -85,6 +85,29 @@ const MIGRATIONS: readonly string[] = [
   ALTER TABLE products ADD COLUMN crop_2x3_w REAL;
   ALTER TABLE products ADD COLUMN crop_2x3_h REAL;
   `,
+
+  // v6 — one live product per company + formula. Soft-delete extras (keep the
+  // oldest), then enforce uniqueness so duplicates cannot be re-added.
+  `
+  UPDATE products
+  SET deleted_at = datetime('now'), updated_at = datetime('now')
+  WHERE id IN (
+    SELECT id FROM (
+      SELECT id,
+             ROW_NUMBER() OVER (
+               PARTITION BY company_id, formula_id
+               ORDER BY created_at ASC, id ASC
+             ) AS rn
+      FROM products
+      WHERE deleted_at IS NULL
+    ) ranked
+    WHERE rn > 1
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_products_company_formula_live
+    ON products(company_id, formula_id)
+    WHERE deleted_at IS NULL;
+  `,
 ];
 
 let db: SQLite.SQLiteDatabase | null = null;

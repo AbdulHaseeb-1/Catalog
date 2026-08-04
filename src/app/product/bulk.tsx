@@ -65,6 +65,7 @@ export default function BulkImportScreen() {
 
   const companies = useLibraryStore((s) => s.companies);
   const formulas = useLibraryStore((s) => s.formulas);
+  const products = useLibraryStore((s) => s.products);
   const addCompany = useLibraryStore((s) => s.addCompany);
   const addFormula = useLibraryStore((s) => s.addFormula);
   const addProducts = useLibraryStore((s) => s.addProducts);
@@ -215,12 +216,37 @@ export default function BulkImportScreen() {
 
   const layoutName = layoutMeta(cropLayout).name;
 
-  const ready = drafts.filter((d) => d.formulaId);
+  const ready = drafts.filter((d) => {
+    if (!d.formulaId) return false;
+    // Drop rows that would hit unique company+formula (batch or library).
+    const batchDup = drafts.some(
+      (other) => other.key !== d.key && other.formulaId === d.formulaId
+    );
+    if (batchDup) {
+      // Keep the first occurrence of each formula in the list.
+      const first = drafts.find((x) => x.formulaId === d.formulaId);
+      if (first && first.key !== d.key) return false;
+    }
+    if (
+      companyId &&
+      products.some((p) => p.companyId === companyId && p.formulaId === d.formulaId)
+    ) {
+      return false;
+    }
+    return true;
+  });
+  const skippedDupes = drafts.filter((d) => d.formulaId).length - ready.length;
   const canSave = !!companyId && ready.length > 0 && !saving;
 
   const save = async () => {
     if (!companyId) return setError('Choose the company these packs belong to.');
-    if (!ready.length) return setError('Give at least one photo a formula.');
+    if (!ready.length) {
+      return setError(
+        skippedDupes > 0
+          ? 'Every photo is a duplicate formula for this company. Change formulas or remove rows.'
+          : 'Give at least one photo a formula.'
+      );
+    }
 
     setSaving(true);
     setError(null);
@@ -255,6 +281,13 @@ export default function BulkImportScreen() {
 
   const renderDraft = ({ item }: { item: Draft }) => {
     const name = formulaName(item.formulaId);
+    const batchClash =
+      !!item.formulaId &&
+      drafts.some((d) => d.key !== item.key && d.formulaId === item.formulaId);
+    const libraryClash =
+      !!companyId &&
+      !!item.formulaId &&
+      products.some((p) => p.companyId === companyId && p.formulaId === item.formulaId);
     return (
       <View
         style={[
@@ -309,6 +342,16 @@ export default function BulkImportScreen() {
           {!name ? (
             <ThemedText themeColor="textSecondary" style={styles.rowWarn}>
               Needs a formula before it can be imported.
+            </ThemedText>
+          ) : null}
+          {batchClash ? (
+            <ThemedText style={[styles.rowWarn, { color: theme.danger }]}>
+              Another photo in this batch uses the same formula — only one can be imported.
+            </ThemedText>
+          ) : null}
+          {libraryClash ? (
+            <ThemedText style={[styles.rowWarn, { color: theme.danger }]}>
+              This company already has that formula. Change the formula or remove this photo.
             </ThemedText>
           ) : null}
         </View>

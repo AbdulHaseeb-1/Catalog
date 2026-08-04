@@ -28,12 +28,14 @@ export {
 
 export {
   applyFraming,
+  assertUniqueCompanyFormula,
   countDeletedProducts,
   countProducts,
   countProductsForPair,
   createProduct,
   deleteProduct,
   deleteProducts,
+  findProductForPair,
   getProduct,
   listAllProductRows,
   listProducts,

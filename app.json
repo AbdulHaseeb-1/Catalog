@@ -39,7 +39,7 @@
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.WRITE_EXTERNAL_STORAGE"
       ],
-      "versionCode": 4
+      "versionCode": 8
     },
     "web": {
       "output": "static",

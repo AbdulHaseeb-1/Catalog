@@ -110,8 +110,52 @@ export async function countProductsForPair(
   return row?.n ?? 0;
 }
 
+/** Live product for this company + formula, if any. */
+export async function findProductForPair(
+  companyId: string,
+  formulaId: string,
+  excludeId?: string
+): Promise<ProductWithRefs | null> {
+  const db = await getDatabase();
+  const row = excludeId
+    ? await db.getFirstAsync<ProductRow>(
+        `${SELECT_SQL} WHERE p.company_id = ? AND p.formula_id = ? AND ${LIVE} AND p.id != ?
+         LIMIT 1`,
+        [companyId, formulaId, excludeId]
+      )
+    : await db.getFirstAsync<ProductRow>(
+        `${SELECT_SQL} WHERE p.company_id = ? AND p.formula_id = ? AND ${LIVE}
+         LIMIT 1`,
+        [companyId, formulaId]
+      );
+  return row ? mapProductWithRefs(row) : null;
+}
+
+/**
+ * Each company may list a formula once. A second pack for the same pair is
+ * almost always an accidental re-import — block it and point at the original.
+ */
+export async function assertUniqueCompanyFormula(
+  companyId: string,
+  formulaId: string,
+  excludeId?: string
+): Promise<void> {
+  const existing = await findProductForPair(companyId, formulaId, excludeId);
+  if (!existing) return;
+  throw new Error(
+    `“${existing.companyName}” already has “${existing.formulaName}”. Open that product to change the photo or framing instead of adding another.`
+  );
+}
+
+function isUniqueConstraintError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /UNIQUE|unique|constraint/i.test(msg);
+}
+
 export async function createProduct(input: CreateProductInput): Promise<Product> {
   const db = await getDatabase();
+  await assertUniqueCompanyFormula(input.companyId, input.formulaId);
+
   const id = createId();
   const ts = nowIso();
 
@@ -126,28 +170,35 @@ export async function createProduct(input: CreateProductInput): Promise<Product>
   const crops = normalizeCrops(input.crops);
   const rotation = asRotation(input.rotation);
 
-  await db.runAsync(
-    `INSERT INTO products
-       (id, company_id, formula_id, image_uri, width, height,
-        crop_x, crop_y, crop_w, crop_h,
-        crop_2x3_x, crop_2x3_y, crop_2x3_w, crop_2x3_h,
-        rotation, sort_order, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      id,
-      input.companyId,
-      input.formulaId,
-      input.imageUri,
-      input.width ?? null,
-      input.height ?? null,
-      ...cropColumns(crops['2x2'] ?? null),
-      ...cropColumns(crops['2x3'] ?? null),
-      rotation,
-      sortOrder,
-      ts,
-      ts,
-    ]
-  );
+  try {
+    await db.runAsync(
+      `INSERT INTO products
+         (id, company_id, formula_id, image_uri, width, height,
+          crop_x, crop_y, crop_w, crop_h,
+          crop_2x3_x, crop_2x3_y, crop_2x3_w, crop_2x3_h,
+          rotation, sort_order, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        input.companyId,
+        input.formulaId,
+        input.imageUri,
+        input.width ?? null,
+        input.height ?? null,
+        ...cropColumns(crops['2x2'] ?? null),
+        ...cropColumns(crops['2x3'] ?? null),
+        rotation,
+        sortOrder,
+        ts,
+        ts,
+      ]
+    );
+  } catch (e) {
+    if (isUniqueConstraintError(e)) {
+      await assertUniqueCompanyFormula(input.companyId, input.formulaId);
+    }
+    throw e;
+  }
 
   return {
     id,
@@ -190,26 +241,37 @@ export async function updateProduct(id: string, patch: UpdateProductInput): Prom
     updatedAt: nowIso(),
   };
 
-  await db.runAsync(
-    `UPDATE products
-       SET company_id = ?, formula_id = ?, image_uri = ?, width = ?, height = ?,
-           crop_x = ?, crop_y = ?, crop_w = ?, crop_h = ?,
-           crop_2x3_x = ?, crop_2x3_y = ?, crop_2x3_w = ?, crop_2x3_h = ?,
-           rotation = ?, updated_at = ?
-     WHERE id = ?`,
-    [
-      next.companyId,
-      next.formulaId,
-      next.imageUri,
-      next.width,
-      next.height,
-      ...cropColumns(next.crops['2x2'] ?? null),
-      ...cropColumns(next.crops['2x3'] ?? null),
-      next.rotation,
-      next.updatedAt,
-      id,
-    ]
-  );
+  if (next.companyId !== current.companyId || next.formulaId !== current.formulaId) {
+    await assertUniqueCompanyFormula(next.companyId, next.formulaId, id);
+  }
+
+  try {
+    await db.runAsync(
+      `UPDATE products
+         SET company_id = ?, formula_id = ?, image_uri = ?, width = ?, height = ?,
+             crop_x = ?, crop_y = ?, crop_w = ?, crop_h = ?,
+             crop_2x3_x = ?, crop_2x3_y = ?, crop_2x3_w = ?, crop_2x3_h = ?,
+             rotation = ?, updated_at = ?
+       WHERE id = ?`,
+      [
+        next.companyId,
+        next.formulaId,
+        next.imageUri,
+        next.width,
+        next.height,
+        ...cropColumns(next.crops['2x2'] ?? null),
+        ...cropColumns(next.crops['2x3'] ?? null),
+        next.rotation,
+        next.updatedAt,
+        id,
+      ]
+    );
+  } catch (e) {
+    if (isUniqueConstraintError(e)) {
+      await assertUniqueCompanyFormula(next.companyId, next.formulaId, id);
+    }
+    throw e;
+  }
 
   return next;
 }
