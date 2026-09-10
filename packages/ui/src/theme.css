@@ -1,0 +1,78 @@
+/*
+ * VerifyBridge shared design tokens (Tailwind v4 `@theme`).
+ *
+ * Import this alongside `@import "tailwindcss";` in every app's CSS entry:
+ *
+ *   @import "tailwindcss";
+ *   @import "@verifybridge/ui/theme.css";
+ *
+ * Tokens are emitted as real CSS custom properties, so the dark-mode
+ * overrides below actually change what utilities like `bg-surface` render -
+ * they are not baked into a static value at build time.
+ */
+
+@theme {
+  --color-canvas: #f7f7f8;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-border: #e4e4e7;
+  --color-border-strong: #d4d4d8;
+  --color-text: #18181b;
+  --color-text-muted: #6b7280;
+  --color-text-faint: #9ca3af;
+
+  --color-accent: #2563eb;
+  --color-accent-hover: #1d4ed8;
+  --color-accent-foreground: #ffffff;
+
+  --color-success: #16a34a;
+  --color-success-foreground: #ffffff;
+  --color-danger: #dc2626;
+  --color-danger-foreground: #ffffff;
+  --color-warning: #d97706;
+  --color-warning-foreground: #ffffff;
+
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+
+  --shadow-subtle: 0 1px 2px 0 rgb(0 0 0 / 0.04), 0 1px 3px 0 rgb(0 0 0 / 0.06);
+  --shadow-raised: 0 2px 4px 0 rgb(0 0 0 / 0.04), 0 8px 24px 0 rgb(0 0 0 / 0.08);
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-canvas: #101012;
+    --color-surface: #18181b;
+    --color-surface-raised: #1e1e22;
+    --color-border: #2a2a2f;
+    --color-border-strong: #38383f;
+    --color-text: #f4f4f5;
+    --color-text-muted: #a1a1aa;
+    --color-text-faint: #71717a;
+    --shadow-subtle: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+    --shadow-raised: 0 8px 24px 0 rgb(0 0 0 / 0.45);
+  }
+}
+
+:root[data-theme="dark"] {
+  --color-canvas: #101012;
+  --color-surface: #18181b;
+  --color-surface-raised: #1e1e22;
+  --color-border: #2a2a2f;
+  --color-border-strong: #38383f;
+  --color-text: #f4f4f5;
+  --color-text-muted: #a1a1aa;
+  --color-text-faint: #71717a;
+  --shadow-subtle: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --shadow-raised: 0 8px 24px 0 rgb(0 0 0 / 0.45);
+}
+
+body {
+  background-color: var(--color-canvas);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
