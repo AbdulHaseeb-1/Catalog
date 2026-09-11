@@ -3,16 +3,27 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ApiClientError } from "@verifybridge/verification-sdk";
 import type { MobileSessionView } from "@verifybridge/shared";
+import type * as AppRedirectModule from "../src/lib/app-redirect";
 
-const { apiClient } = vi.hoisted(() => ({
+const { apiClient, attemptAppRedirect } = vi.hoisted(() => ({
   apiClient: {
     getMobileSession: vi.fn(),
     startMobileVerification: vi.fn(),
     completeDemoVerification: vi.fn(),
   },
+  // Resolves to the browser flow immediately - the hand-off attempt itself
+  // is covered separately in app-redirect.test.ts.
+  attemptAppRedirect: vi.fn((_token: string, onFallback: () => void) => {
+    onFallback();
+    return { cancel: vi.fn() };
+  }),
 }));
 
 vi.mock("../src/lib/api-client", () => ({ apiClient }));
+vi.mock("../src/lib/app-redirect", async (importOriginal) => {
+  const actual = await importOriginal<typeof AppRedirectModule>();
+  return { ...actual, attemptAppRedirect };
+});
 
 // Imported after the mock so App picks up the mocked client.
 const { default: App } = await import("../src/App");
@@ -40,6 +51,59 @@ describe("VerifyBridge mobile app", () => {
   afterEach(() => {
     // @ts-expect-error - test-only cleanup of a property we defined
     delete navigator.mediaDevices;
+    // @ts-expect-error - test-only cleanup of a property we defined
+    delete navigator.userAgent;
+  });
+
+  function setMobileUserAgent() {
+    Object.defineProperty(navigator, "userAgent", {
+      configurable: true,
+      value: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+    });
+  }
+
+  it("attempts a native app hand-off before showing the browser flow", async () => {
+    setMobileUserAgent();
+    let capturedFallback: (() => void) | undefined;
+    attemptAppRedirect.mockImplementationOnce((_token: string, onFallback: () => void) => {
+      capturedFallback = onFallback;
+      return { cancel: vi.fn() };
+    });
+    apiClient.getMobileSession.mockResolvedValue(session());
+
+    render(<App />);
+
+    expect(attemptAppRedirect).toHaveBeenCalledWith("test-token", expect.any(Function));
+    expect(screen.getByText(/opening the verifybridge app if it's installed/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Continue" })).not.toBeInTheDocument();
+
+    capturedFallback?.();
+    expect(await screen.findByRole("button", { name: "Continue" })).toBeInTheDocument();
+  });
+
+  it("lets the user skip straight to the browser flow", async () => {
+    setMobileUserAgent();
+    attemptAppRedirect.mockImplementationOnce(() => ({ cancel: vi.fn() }));
+    apiClient.getMobileSession.mockResolvedValue(session());
+
+    render(<App />);
+    await userEvent.click(await screen.findByText(/continue in browser instead/i));
+
+    expect(await screen.findByRole("button", { name: "Continue" })).toBeInTheDocument();
+  });
+
+  it("never attempts a native app hand-off on a desktop user agent", async () => {
+    Object.defineProperty(navigator, "userAgent", {
+      configurable: true,
+      value:
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    });
+    apiClient.getMobileSession.mockResolvedValue(session());
+
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Continue" })).toBeInTheDocument();
+    expect(attemptAppRedirect).not.toHaveBeenCalled();
   });
 
   it("shows an error for a URL that isn't a verification link", async () => {

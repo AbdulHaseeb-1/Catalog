@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { MobileSessionView } from "@verifybridge/shared";
-import { Badge, Button, Card, Countdown, ErrorState, Spinner, SuccessState } from "@verifybridge/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  Countdown,
+  ErrorState,
+  Spinner,
+  SuccessState,
+} from "@verifybridge/ui";
 import { ApiClientError } from "@verifybridge/verification-sdk";
 import { CameraCapture } from "./components/CameraCapture";
 import { apiClient } from "./lib/api-client";
+import { attemptAppRedirect, isMobileOs } from "./lib/app-redirect";
 
 type ViewState =
   | { kind: "loading" }
@@ -35,6 +44,22 @@ export default function App() {
   const [view, setView] = useState<ViewState>(() =>
     token ? { kind: "loading" } : { kind: "invalid-link" },
   );
+  // Desktop browsers have no native app to hand off to - only attempt it on
+  // a phone/tablet OS (see isMobileOs's doc comment for why this also
+  // matters for correctness, not just UX).
+  const shouldAttemptAppRedirect = useMemo(
+    () => Boolean(token) && isMobileOs(navigator.userAgent),
+    [token],
+  );
+  const [redirectStatus, setRedirectStatus] = useState<"attempting" | "resolved">(
+    shouldAttemptAppRedirect ? "attempting" : "resolved",
+  );
+
+  useEffect(() => {
+    if (!token || !shouldAttemptAppRedirect) return;
+    const controller = attemptAppRedirect(token, () => setRedirectStatus("resolved"));
+    return () => controller.cancel();
+  }, [token, shouldAttemptAppRedirect]);
 
   const handleError = useCallback((error: unknown): ViewState => {
     if (error instanceof ApiClientError) {
@@ -69,9 +94,7 @@ export default function App() {
   }
 
   function handleCameraCancel() {
-    setView((prev) =>
-      prev.kind === "camera" ? { kind: "landing", session: prev.session } : prev,
-    );
+    setView((prev) => (prev.kind === "camera" ? { kind: "landing", session: prev.session } : prev));
   }
 
   async function handleCompleteDemo(outcome: "success" | "failure") {
@@ -100,15 +123,37 @@ export default function App() {
         <p className="text-sm font-semibold tracking-wide text-accent">VerifyBridge</p>
       </header>
       <Card padding="lg">
-        <ViewBody
-          view={view}
-          onContinueFromLanding={handleContinueFromLanding}
-          onCameraContinue={handleCameraContinue}
-          onCameraCancel={handleCameraCancel}
-          onCompleteDemo={handleCompleteDemo}
-          onExpire={() => setView({ kind: "expired" })}
-        />
+        {shouldAttemptAppRedirect && redirectStatus === "attempting" ? (
+          <OpeningAppView onContinueInBrowser={() => setRedirectStatus("resolved")} />
+        ) : (
+          <ViewBody
+            view={view}
+            onContinueFromLanding={handleContinueFromLanding}
+            onCameraContinue={handleCameraContinue}
+            onCameraCancel={handleCameraCancel}
+            onCompleteDemo={handleCompleteDemo}
+            onExpire={() => setView({ kind: "expired" })}
+          />
+        )}
       </Card>
+    </div>
+  );
+}
+
+function OpeningAppView({ onContinueInBrowser }: { onContinueInBrowser: () => void }) {
+  return (
+    <div className="flex flex-col items-center gap-4 py-4 text-center">
+      <Spinner size="lg" label="Opening the VerifyBridge app" />
+      <p className="text-sm text-text-muted">
+        Opening the VerifyBridge app if it&apos;s installed…
+      </p>
+      <button
+        type="button"
+        onClick={onContinueInBrowser}
+        className="text-sm text-text-muted underline-offset-2 hover:underline"
+      >
+        Continue in browser instead
+      </button>
     </div>
   );
 }

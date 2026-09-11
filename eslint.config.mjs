@@ -54,10 +54,7 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
-      "react-refresh/only-export-components": [
-        "warn",
-        { allowConstantExport: true },
-      ],
+      "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
     },
   },
   {
@@ -66,6 +63,22 @@ export default tseslint.config(
       globals: {
         ...globals.webextensions,
       },
+    },
+  },
+  {
+    // React Native/Expo: has react-hooks like the other React apps, but no
+    // DOM (globals.browser) and no Vite HMR (react-refresh).
+    files: ["apps/native/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: {
+        __DEV__: "readonly",
+      },
+    },
+    plugins: {
+      "react-hooks": reactHooks,
+    },
+    rules: {
+      ...reactHooks.configs.recommended.rules,
     },
   },
   {

@@ -10,12 +10,17 @@ Desktop website (needs identity verification)
         │  "Verify using phone" click
         ▼
 Chrome extension  ───POST /verification-sessions───▶  Backend (NestJS)
-        │  QR code / link                                   │
+        │  QR code / link (always an HTTPS URL)               │
         ▼                                                    │  Postgres (durable)
-   Phone scans QR                                            │  Redis (rate limit, pub/sub)
-        ▼                                                    │
-   Mobile PWA  ──camera permission──▶ getUserMedia            │
+   Phone opens the link                                       │  Redis (rate limit, pub/sub)
         │                                                     │
+        ├─ native app installed? ──▶ apps/native (Expo)       │
+        │  (App Links/Universal Links, or a JS-timeout        │
+        │   fallback - see Deep linking) ──camera──▶ on-device│
+        │                              ML Kit face detection  │
+        │                                                     │
+        └─ else ────────────────────▶ apps/mobile (PWA) ──camera permission──▶ getUserMedia
+                                                                │
         │──POST .../start─────────────────────────────────▶  │  provider.createVerification()
         │──POST .../complete-demo (dev only)──────────────▶  │  applyProviderResult()
         │                                                     │
@@ -60,10 +65,16 @@ Chrome extension  ───POST /verification-sessions───▶  Backend (Nes
   Mode 2](#mode-1-vs-mode-2) below. The popup's manual flow is always
   available, but it never claims to have completed a third party's check
   unless that party actually integrated.
-- **Not** real facial recognition in this repository. The only provider
-  implemented is `DemoVerificationProvider`, which never inspects a camera
-  frame - it is unmistakably marked development-only (see
-  [Security assumptions](#security-assumptions)).
+- **Not** real facial recognition or identity matching in this repository.
+  The only provider implemented is `DemoVerificationProvider`, which never
+  inspects a camera frame - it is unmistakably marked development-only (see
+  [Security assumptions](#security-assumptions)). The native app
+  (`apps/native`) does run real, on-device face *detection* (Google ML Kit)
+  before its "Complete demo verification" button becomes tappable, but that
+  is a local sanity/liveness-ish gate against an empty frame or a photo held
+  up out of frame - not identity matching, not anti-spoofing, and not a
+  substitute for a real provider's biometric pipeline. See
+  [Native app](#native-app-apps-native).
 
 ## Mode 1 vs Mode 2
 
@@ -85,6 +96,7 @@ verifybridge/
 │   ├── api/            NestJS + Prisma + Redis + WebSocket backend
 │   ├── extension/      WXT + React Chrome extension (Manifest V3)
 │   ├── mobile/         Vite + React PWA - the phone-side verification flow
+│   ├── native/         Expo/React Native app - on-device face detection
 │   └── demo-site/      A simulated desktop site integrating VerifyBridge
 ├── packages/
 │   ├── shared/         Cross-app types, Zod schemas, WS event contracts
@@ -169,6 +181,94 @@ Route `/session/:token`. Opens the session (which also marks it
 Camera" tap - never on mount. No frame is ever captured, stored, or
 uploaded; the demo provider's completion is a deliberate button press, not a
 biometric check.
+
+Also runs the "open the native app if it's installed" attempt
+(`src/lib/app-redirect.ts`) before rendering the rest of the flow - see
+[Deep linking](#deep-linking-app-then-browser).
+
+### Native app (`apps/native`)
+
+An Expo/React Native app (Expo SDK 57, file-based routing via
+`expo-router`) that mirrors the mobile PWA's session flow
+(`app/session/[token].tsx`: loading → landing → camera → verifying →
+success/failure/expired) using the same `@verifybridge/verification-sdk`
+client and `@verifybridge/shared` types/state machine - it is a second
+client of the same REST API, not a separate backend integration.
+`@verifybridge/ui` (DOM/Tailwind) is not reused here; native screens use
+plain React Native primitives.
+
+**Face detection gate** (`components/FaceScanCamera.tsx` +
+`lib/face-gate.ts`): once the user taps "Allow Camera", the app captures a
+still frame roughly every 700ms (`expo-camera`'s `takePictureAsync`) and
+runs it through on-device Google ML Kit face detection
+(`@react-native-ml-kit/face-detection`). `evaluateFaceGate` (a pure,
+independently unit-tested function) checks the result for exactly one face,
+close enough to the camera, centered in frame, and (when ML Kit reports eye
+state) not obviously eyes-closed - the "Continue"/"Complete demo
+verification" button only becomes tappable once that gate passes. Every
+captured frame is deleted immediately after detection
+(`new File(uri).delete()`); nothing is stored or transmitted - this is
+strictly a local sanity/liveness-ish check, **not** identity matching, and
+not a substitute for a real provider's anti-spoofing pipeline (same
+disclaimer as the demo provider itself - see
+[What this is NOT](#what-this-is-not)).
+
+Because native camera linking and ML Kit aren't compatible with Expo Go,
+this app requires a custom dev client / prebuild - see
+[Running the native app](#running-the-native-app).
+
+## Deep linking: app-then-browser
+
+Clicking the same verification link (from the QR code, "copy link", or a
+shared URL) opens the native app if it's installed, and the mobile PWA
+otherwise. The QR code and every generated link always encode the
+**HTTPS** mobile URL (`PUBLIC_MOBILE_URL/session/:token`) - never a
+custom scheme directly - so a link is always openable even when the app
+isn't installed; only the app hand-off itself is layered on top:
+
+1. **Android App Links / iOS Universal Links** (production): when
+   `apps/native`'s `android.intentFilters`
+   (`autoVerify: true`)/`ios.associatedDomains` are configured with real
+   values and the corresponding `.well-known` files are served from the
+   mobile PWA's own host, the OS intercepts the HTTPS URL before it ever
+   reaches a browser and opens the native app directly - no JavaScript
+   involved, and it degrades to the browser automatically if the app isn't
+   installed or verification fails.
+2. **Client-side fallback** (`apps/mobile/src/lib/app-redirect.ts`, always
+   active, including dev): once the PWA loads, it sets
+   `location.href = "verifybridge://session/:token"` and watches
+   `visibilitychange`. If the OS switches away from the tab (the app took
+   the hand-off) within ~1.3s, the browser UI is skipped entirely, with a
+   "Continue in browser instead" escape hatch always visible. If nothing
+   happens within that window - the common case in development, or in
+   production for someone without the app and without a browser prompt for
+   the unregistered scheme - it falls through to the normal browser flow.
+   If the user *does* get handed to the app but returns to the browser tab
+   afterwards (backgrounded the app, dismissed an "Open in app?" prompt),
+   the same code detects that and falls through then instead, so there's
+   never a dead end.
+
+### Setting up real App Links / Universal Links
+
+The `.well-known` files ship with obvious placeholders
+(`apps/mobile/public/.well-known/assetlinks.json`,
+`.../apple-app-site-association`) - replace them for a real deployment:
+
+- **Android**: get your release signing certificate's SHA-256 fingerprint
+  (`eas credentials -p android`, or your Play Console App Signing details)
+  and put it in `assetlinks.json`'s `sha256_cert_fingerprints`. The file
+  must be served over HTTPS from exactly the host in
+  `EXPO_PUBLIC_MOBILE_HOST` (`apps/native/app.config.ts`'s
+  `android.intentFilters`), with no redirects.
+- **iOS**: put your real Apple Team ID in
+  `apple-app-site-association`'s `appID` (`TEAMID.com.verifybridge.app`).
+  The file must be served with no extension, over HTTPS, ideally as
+  `Content-Type: application/json`, from the same host as
+  `ios.associatedDomains`.
+- Both files are already copied into `apps/mobile`'s build output as-is
+  (they live under `apps/mobile/public/.well-known/`) - whatever static
+  host serves the built mobile app serves these too, as long as it doesn't
+  add a redirect or strip the extension-less iOS file.
 
 ## Security assumptions
 
@@ -286,6 +386,41 @@ For active development, `pnpm dev:extension` (or
 the unpacked extension from `chrome://extensions` after changes to the
 manifest/background/content script (the popup hot-reloads on its own).
 
+## Running the native app
+
+`apps/native` needs a custom dev client (native camera linking + ML Kit
+aren't Expo-Go compatible) and, for Android, a local Android SDK.
+
+```bash
+cp apps/native/.env.example apps/native/.env
+pnpm --filter @verifybridge/native run prebuild   # expo prebuild --clean, generates android/ (and ios/ on a Mac)
+pnpm --filter @verifybridge/native run android    # expo run:android - builds + installs the dev client
+```
+
+`prebuild` regenerates `android/`/`ios/` from `app.config.ts` and is
+git-ignored by design (Continuous Native Generation) - never hand-edit
+those folders; change `app.config.ts` or its plugins instead and re-run
+`prebuild`.
+
+**Android, verified in this repo**: a real (non-emulator) build was
+verified by installing a minimal Android SDK (`cmdline-tools`,
+`platform-tools`, `platforms;android-35`, `build-tools;35.0.0`) and running
+`./gradlew assembleDebug` against the `expo prebuild`-generated project -
+see the commit history for the exact command and its output. Running the
+app on a device/emulator (`expo run:android` end-to-end, including
+granting camera permission and pointing the camera at a face) has not been
+manually exercised in this environment (no emulator/device attached here);
+the compiled build and the independently unit-tested `lib/face-gate.ts`
+logic are the verification that exists.
+
+**iOS could not be built or verified in this environment** - it requires
+Xcode on a Mac (or EAS Build's iOS queue), neither of which is available
+here. The `ios.bundleIdentifier`/`associatedDomains` config
+(`app.config.ts`) and the `expo-camera` plugin are written correctly per
+Expo's SDK 57 docs, but have only been checked for configuration
+correctness, not compiled. Verify with `pnpm --filter @verifybridge/native
+run ios` (or `eas build -p ios`) on a Mac before shipping.
+
 ## Testing the mobile app
 
 The mobile app is a normal Vite dev server (`pnpm dev:mobile`,
@@ -350,7 +485,8 @@ added.
 | `packages/verification-sdk` | REST client error mapping, WS reconnect/seq-dedup | nothing |
 | `apps/api` (`pnpm test`) | token hashing, full session-service state machine (mocked repo/provider) | nothing |
 | `apps/api` (`pnpm run test:e2e`) | real HTTP + WebSocket flow, expiry, replay, rate limiting, origin binding | local Postgres + Redis |
-| `apps/mobile` | invalid/expired session, camera denied, demo success/failure | nothing (mocks `getUserMedia`/API client) |
+| `apps/mobile` | invalid/expired session, camera denied, demo success/failure, app-then-browser hand-off timing | nothing (mocks `getUserMedia`/API client/app-redirect) |
+| `apps/native` | `evaluateFaceGate`'s gating logic (single/no/multiple faces, too small, off-center, eyes closed, missing eye data) | nothing |
 | `apps/extension` | message guards, site-adapter matching, background message routing, popup rendering | nothing (WXT's `fake-browser`) |
 | `apps/demo-site` | extension-not-found timeout, live update to "Identity verified" | nothing |
 | `e2e` | the real thing, in a real browser | built apps + local Postgres/Redis |
@@ -497,6 +633,20 @@ only by `providerSessionId`.
 - [x] Demo provider is clearly marked development-only (in its own doc
       comment, its log warning on boot, and the mobile UI's "Development
       only" badge)
+- [x] Native app (Expo/React Native, Android + iOS) mirrors the mobile PWA's
+      verification flow against the same API
+- [x] Real on-device face detection (Google ML Kit) gates the native app's
+      demo-completion button - not identity matching, not a liveness bypass
+- [x] Captured frames are deleted immediately after on-device detection -
+      never stored, never transmitted
+- [x] Clicking a verification link opens the native app if installed, the
+      browser otherwise (App Links/Universal Links in production; a
+      visibility-timeout JS fallback always active, including dev)
+- [x] QR code / generated links always encode the HTTPS mobile URL, never a
+      custom scheme, so opening one never dead-ends without the app
+- [x] Native app's Android build verified for real in this environment
+      (`expo prebuild` + `./gradlew assembleDebug`); iOS could not be built
+      here (no Mac/Xcode) - documented, not silently skipped
 - [x] This README explains the full system
 
 ## License
