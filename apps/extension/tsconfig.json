@@ -1,0 +1,9 @@
+{
+  "extends": ["../../tsconfig.base.json", "./.wxt/tsconfig.json"],
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    // TypeScript 5.9 (pinned here for WXT compatibility) predates the "6.0"
+    // deprecation cycle used by tsconfig.base.json for the rest of the repo.
+    "ignoreDeprecations": "5.0"
+  }
+}

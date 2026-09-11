@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Mirrors `VERIFICATION_STATUSES` in packages/shared/src/status.ts - keep in sync.
+enum VerificationStatus {
+  CREATED
+  MOBILE_OPENED
+  CAMERA_GRANTED
+  VERIFYING
+  VERIFIED
+  FAILED
+  EXPIRED
+  CONSUMED
+}
+
+/// A single-use, short-lived cross-device verification transaction. Raw
+/// tokens are never stored - only their salted hashes - and the plaintext
+/// values are returned to the caller exactly once, at creation time.
+model VerificationSession {
+  id     String              @id @default(uuid())
+  origin String
+  status VerificationStatus  @default(CREATED)
+
+  desktopTokenHash String @unique
+  mobileTokenHash  String @unique
+
+  provider          String?
+  providerSessionId String?
+
+  /// Monotonically increasing per-session counter, included on every
+  /// WebSocket event so clients can detect gaps/out-of-order delivery.
+  seq Int @default(0)
+
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  verifiedAt DateTime?
+  consumedAt DateTime?
+
+  failureReason String?
+
+  @@index([status])
+  @@index([expiresAt])
+}
