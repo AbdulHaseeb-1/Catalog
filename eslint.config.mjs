@@ -69,6 +69,17 @@ export default tseslint.config(
     },
   },
   {
+    // NestJS resolves constructor-injected providers via emitDecoratorMetadata
+    // + reflect-metadata, which needs the *value* import of the class, not a
+    // type-only one - `import type` erases it and DI silently fails at
+    // runtime ("Nest can't resolve dependencies..."). This rule can't tell
+    // "used as a DI type" apart from "only used as a type", so it's off here.
+    files: ["apps/api/**/*.ts"],
+    rules: {
+      "@typescript-eslint/consistent-type-imports": "off",
+    },
+  },
+  {
     files: ["**/*.spec.ts", "**/*.test.ts", "**/*.test.tsx", "**/test/**"],
     languageOptions: {
       globals: {
