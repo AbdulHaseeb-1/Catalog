@@ -1,0 +1,9 @@
+@import "tailwindcss";
+@import "@verifybridge/ui/theme.css";
+@source "../../../../packages/ui/src";
+
+html,
+body {
+  width: 380px;
+  margin: 0;
+}
