@@ -38,9 +38,16 @@ async function bootstrap(): Promise<void> {
     // is not an access-control mechanism for the API itself (that's the
     // job of session tokens / origin-binding / rate limiting below), so an
     // unrecognized origin just means "don't add CORS headers", not "reject
-    // the request".
+    // the request". Any chrome-extension:// origin is allowed here for the
+    // same reason: a published extension has one fixed, permanent ID shared
+    // by every install, so this is equivalent to allow-listing it by name,
+    // and an *unpacked* dev build's ID is only ever known to whoever loaded
+    // it locally. Note this is unrelated to TRUSTED_INTERMEDIARY_ORIGINS,
+    // which is the actual security boundary for origin-binding.
     origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-      callback(null, !origin || allowedOrigins.includes(origin));
+      const allowed =
+        !origin || allowedOrigins.includes(origin) || origin.startsWith("chrome-extension://");
+      callback(null, allowed);
     },
     methods: ["GET", "POST"],
     allowedHeaders: ["Content-Type", "Authorization"],

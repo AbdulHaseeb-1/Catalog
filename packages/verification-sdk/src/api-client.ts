@@ -47,7 +47,10 @@ export class VerificationApiClient {
 
   constructor(options: VerificationApiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    // A bare `fetch` reference throws "Illegal invocation" when later called
+    // as `this.fetchImpl(...)` in some runtimes (notably service workers) -
+    // fetch relies on internal slots tied to its realm's global object.
+    this.fetchImpl = options.fetchImpl ?? fetch.bind(globalThis);
   }
 
   private async request<T>(
