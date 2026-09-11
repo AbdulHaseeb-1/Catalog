@@ -1,7 +1,17 @@
 import { browser, defineContentScript } from "#imports";
-import type { VerificationResult } from "@verifybridge/shared";
+import { VERIFYBRIDGE_CHANNEL } from "@verifybridge/shared";
+import type { ContentToPageEnvelope, VerificationResult } from "@verifybridge/shared";
 import { findAdapterFor } from "../lib/site-adapters";
 import { isExtensionResponseMessage, readPageToContentEnvelope } from "../lib/messaging/guards";
+
+function postToPage(message: ContentToPageEnvelope["message"]): void {
+  const envelope: ContentToPageEnvelope = {
+    channel: VERIFYBRIDGE_CHANNEL,
+    direction: "content-to-page",
+    message,
+  };
+  window.postMessage(envelope, window.location.origin);
+}
 
 export default defineContentScript({
   // Dev demo site. Add your integrated site's origin(s) here (and a
@@ -24,7 +34,16 @@ export default defineContentScript({
         message.type === "CREATE_VERIFICATION_SESSION"
           ? { ...message, origin: window.location.origin } // never trust a page-supplied origin
           : message;
-      void browser.runtime.sendMessage(outgoing);
+      // Relay the background's direct response back to the page (e.g. the
+      // initial CREATED status right after a CREATE_VERIFICATION_SESSION
+      // request) - this is also how a page detects the extension is
+      // actually installed and listening, vs. silently doing nothing.
+      browser.runtime
+        .sendMessage(outgoing)
+        .then((response: unknown) => {
+          if (isExtensionResponseMessage(response)) postToPage(response);
+        })
+        .catch(() => {});
     });
 
     browser.runtime.onMessage.addListener((message) => {
